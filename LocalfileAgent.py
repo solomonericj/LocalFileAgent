@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-summarize_files.py — Scan files/directories and either summarise them or
+LocalfileAgent.py — Scan files/directories and either summarise them or
 chat with them interactively using a local Ollama model.
 
 Modes
@@ -10,11 +10,11 @@ Modes
 
 Usage
 -----
-  python summarize_files.py /path/to/directory
-  python summarize_files.py file1.txt file2.py --output summaries.md
-  python summarize_files.py /path/to/dir --ext .py .md --recursive
-  python summarize_files.py /path/to/dir --chat
-  python summarize_files.py /path/to/dir --chat --model gemma3
+  python LocalfileAgent.py /path/to/directory
+  python LocalfileAgent.py file1.txt file2.py --output summaries.md
+  python LocalfileAgent.py /path/to/dir --ext .py .md --recursive
+  python LocalfileAgent.py /path/to/dir --chat
+  python LocalfileAgent.py /path/to/dir --chat --model gemma3
 """
 
 import argparse
