@@ -1,11 +1,13 @@
 # LocalFileAgent
 
-A command-line tool that scans local files and directories, then either summarises their contents or lets you chat with them interactively — all powered by a locally-running [Ollama](https://ollama.com) model. No data leaves your machine.
+A tool that scans local files and directories, then either summarises their contents or lets you chat with them interactively — all powered by a locally-running [Ollama](https://ollama.com) model. No data leaves your machine.
+
+Available as both a **desktop GUI** (`gui.py`) and a **command-line tool** (`LocalfileAgent.py`).
 
 ## Features
 
 - **Summarise mode** — generates a concise 3-5 sentence summary for every matched file
-- **Chat mode** — loads file contents into context and opens a REPL for Q&A
+- **Chat mode** — loads file contents into context for interactive Q&A
 - Supports a wide range of **text formats**: `.py`, `.js`, `.ts`, `.md`, `.json`, `.yaml`, `.sql`, `.html`, `.csv`, and more
 - Supports **binary document formats**: `.pdf`, `.docx`, `.xlsx`, `.xls`, `.pptx`, `.ppt`
 - Optional **recursive** directory scanning
@@ -18,6 +20,7 @@ A command-line tool that scans local files and directories, then either summaris
 - Python 3.10+
 - [Ollama](https://ollama.com) running locally (`ollama serve`)
 - At least one model pulled, e.g. `ollama pull mistral`
+- **GUI only:** `pip install PySide6`
 
 ### Optional dependencies (for binary file formats)
 
@@ -30,7 +33,24 @@ A command-line tool that scans local files and directories, then either summaris
 | `.pptx` | `pip install python-pptx` |
 | `.doc` / `.ppt` | `pip install pywin32` (Windows + Microsoft Office required) |
 
-## Usage
+## GUI
+
+Launch the desktop interface:
+
+```bash
+pip install PySide6
+python gui.py
+```
+
+The GUI provides:
+
+- **File panel** — add individual files or entire folders via the OS file picker; remove or clear selections at any time
+- **Summarize tab** — run summarization with a progress bar, view results inline, and save to `.md` or `.txt`
+- **Chat tab** — load files into context and have a multi-turn conversation; supports history clearing
+- **Options bar** — model dropdown (auto-populated from Ollama), recursive toggle, extension filter
+- All Ollama calls run in background threads so the window stays responsive
+
+## CLI
 
 ```bash
 # Summarise all supported files in a directory
@@ -52,7 +72,7 @@ python LocalfileAgent.py /path/to/directory --chat
 python LocalfileAgent.py /path/to/directory --chat --model gemma3
 ```
 
-## CLI Options
+### CLI Options
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -64,9 +84,7 @@ python LocalfileAgent.py /path/to/directory --chat --model gemma3
 | `--recursive` | `-r` | Recurse into subdirectories |
 | `--no-check` | | Skip the Ollama availability check on startup |
 
-## Chat Mode Commands
-
-Once in chat mode, the following commands are available:
+### Chat Mode Commands
 
 | Command | Action |
 |---------|--------|
