@@ -19,10 +19,12 @@ Usage
 
 import argparse
 import json
+import socket
 import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Iterator
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -75,12 +77,12 @@ def _post(url: str, payload: dict, timeout: int = 6000) -> dict:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
-    except TimeoutError as exc:
-        raise TimeoutError(
-            f"Ollama did not respond within {timeout}s — "
-            "the file may be too large for this model."
-        ) from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise TimeoutError(
+                f"Ollama did not respond within {timeout}s — "
+                "the file may be too large for this model."
+            ) from exc
         raise ConnectionError(
             "Cannot reach Ollama.\n"
             "Make sure Ollama is running: https://ollama.com"
@@ -111,6 +113,41 @@ def query_ollama_chat(messages: list[dict], model: str) -> tuple[str, list[dict]
     assistant_msg = result.get("message", {})
     reply = assistant_msg.get("content", "").strip()
     return reply, messages + [{"role": "assistant", "content": reply}]
+
+
+def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
+    """Yields token strings one at a time from the Ollama streaming chat API."""
+    data = json.dumps({
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }).encode()
+    req = urllib.request.Request(
+        OLLAMA_CHAT, data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6000) as resp:
+            for raw_line in resp:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                token = obj.get("message", {}).get("content", "")
+                if token:
+                    yield token
+                if obj.get("done"):
+                    break
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise TimeoutError(
+                "Ollama did not respond — the file may be too large for this model."
+            ) from exc
+        raise ConnectionError(
+            "Cannot reach Ollama.\n"
+            "Make sure Ollama is running: https://ollama.com"
+        ) from exc
 
 
 def check_ollama_available(model: str) -> None:
@@ -291,25 +328,29 @@ def _extract_via_word_powerpoint(path: Path, ext: str) -> str | None:
         if ext == ".doc":
             app = win32com.client.Dispatch("Word.Application")
             app.Visible = False
-            doc = app.Documents.Open(str(path), ReadOnly=True)
             try:
-                return doc.Content.Text
+                doc = app.Documents.Open(str(path), ReadOnly=True)
+                try:
+                    return doc.Content.Text
+                finally:
+                    doc.Close(SaveChanges=False)
             finally:
-                doc.Close(SaveChanges=False)
                 app.Quit()
         else:  # .ppt
             app = win32com.client.Dispatch("PowerPoint.Application")
-            pres = app.Presentations.Open(str(path), WithWindow=False, ReadOnly=True)
             try:
-                parts = []
-                for i, slide in enumerate(pres.Slides, 1):
-                    parts.append(f"[Slide {i}]")
-                    for shape in slide.Shapes:
-                        if shape.HasTextFrame and shape.TextFrame.HasText:
-                            parts.append(shape.TextFrame.TextRange.Text)
-                return "\n".join(parts)
+                pres = app.Presentations.Open(str(path), WithWindow=False, ReadOnly=True)
+                try:
+                    parts = []
+                    for i, slide in enumerate(pres.Slides, 1):
+                        parts.append(f"[Slide {i}]")
+                        for shape in slide.Shapes:
+                            if shape.HasTextFrame and shape.TextFrame.HasText:
+                                parts.append(shape.TextFrame.TextRange.Text)
+                    return "\n".join(parts)
+                finally:
+                    pres.Close()
             finally:
-                pres.Close()
                 app.Quit()
     finally:
         pythoncom.CoUninitialize()
@@ -325,8 +366,12 @@ def run_summarise(files: list[Path], model: str, output: str | None) -> None:
         print(f"[{i}/{len(files)}] {path.name}", end=" … ", flush=True)
         content = read_file_safe(path)
         if content is None:
-            size = path.stat().st_size
-            summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
+            try:
+                size = path.stat().st_size
+            except OSError:
+                summary = "(skipped — file no longer accessible)"
+            else:
+                summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
         else:
             try:
                 summary = query_ollama_generate(
