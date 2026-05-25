@@ -176,7 +176,13 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
 def embed_ollama(texts: list[str], model: str) -> list[list[float]]:
     """Embed a batch of strings via Ollama's /api/embed. Returns one vector per input."""
     result = _post(OLLAMA_EMBED, {"model": model, "input": texts})
-    return result.get("embeddings", [])
+    embeddings = result.get("embeddings")
+    if not embeddings:
+        raise ValueError(
+            f"Ollama returned no embeddings — check that model '{model}' "
+            f"supports embeddings (e.g. ollama pull nomic-embed-text)."
+        )
+    return embeddings
 
 
 def check_ollama_available(model: str) -> None:

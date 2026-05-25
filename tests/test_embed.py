@@ -40,3 +40,16 @@ def test_raises_connection_error():
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
         with pytest.raises(ConnectionError):
             embed_ollama(["x"], "nomic-embed-text")
+
+
+def test_raises_timeout_error():
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError(socket.timeout())):
+        with pytest.raises(TimeoutError):
+            embed_ollama(["x"], "nomic-embed-text")
+
+
+def test_raises_when_no_embeddings_returned():
+    resp = _fake_json_response({"error": "model not found"})
+    with patch("urllib.request.urlopen", return_value=resp):
+        with pytest.raises(ValueError):
+            embed_ollama(["x"], "nomic-embed-text")
