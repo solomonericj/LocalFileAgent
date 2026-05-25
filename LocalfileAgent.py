@@ -21,6 +21,7 @@ import argparse
 import json
 import socket
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -388,18 +389,22 @@ def run_summarise(files: list[Path], model: str, output: str | None) -> None:
                 summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
         else:
             try:
+                t0 = time.monotonic()
                 summary = query_ollama_generate(
                     f"File: {path.name}\n\n{content}",
                     SUMMARISE_SYSTEM,
                     model,
                 )
+                elapsed = time.monotonic() - t0
             except TimeoutError as exc:
                 summary = f"(skipped — {exc})"
+                elapsed = 0.0
             except ConnectionError as exc:
                 print(f"\n✗  {exc}", file=sys.stderr)
                 sys.exit(1)
         results.append((path, summary))
-        print("done")
+        suffix = f" ({elapsed:.1f}s)" if elapsed else ""
+        print(f"done{suffix}")
 
     output_path = Path(output) if output else None
     use_md = output_path and output_path.suffix.lower() == ".md"
@@ -517,12 +522,15 @@ def run_chat(files: list[Path], model: str) -> None:
         print(f"\n{model}: ", end="", flush=True)
 
         try:
+            t0 = time.monotonic()
             reply, messages = query_ollama_chat(messages, model)
+            elapsed = time.monotonic() - t0
         except ConnectionError as exc:
             print(f"\n✗  {exc}", file=sys.stderr)
             sys.exit(1)
 
         print(reply)
+        print(f"  ⏱  {elapsed:.1f}s")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
