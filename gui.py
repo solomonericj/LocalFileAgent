@@ -123,6 +123,9 @@ class StreamingChatWorker(QThread):
                             {"role": "user", "content": self.user_text},
                         ]
                     else:
+                        # numpy missing or nothing indexable — tell the user we
+                        # are not retrieving, then load full file contents.
+                        self.context_info.emit("RAG unavailable — using full file context.")
                         self._load_full_context()
                 else:
                     self._load_full_context()
@@ -841,6 +844,8 @@ class MainWindow(QMainWindow):
             self._append_system("Model changed — context will reload on next message.")
 
     def _on_embed_model_changed(self, _new_model: str):
+        # Always drop the index (it's keyed by embed model); the flag reset
+        # below is a no-op unless a conversation had already loaded files.
         self._rag_index = None
         if self._chat_files_loaded:
             self._chat_files_loaded = False
@@ -1011,6 +1016,12 @@ class MainWindow(QMainWindow):
         self._clear_busy()
         if self._stream_text:
             self._append_system("(response interrupted)")
+        # If the very first (indexing) turn failed, no conversation was
+        # established — drop the half-built state so the next message rebuilds
+        # cleanly with the system prompt instead of sending a bare user turn.
+        if not self._chat_messages:
+            self._chat_files_loaded = False
+            self._rag_index = None
         self._set_chat_input_enabled(True)
         QMessageBox.critical(self, "Ollama Error", msg)
 
