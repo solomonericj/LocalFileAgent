@@ -36,3 +36,11 @@ def test_missing_file_token_estimate_is_zero(qtbot):
     w = FileItemWidget("/nonexistent/path/file.py")
     qtbot.addWidget(w)
     assert w.token_estimate() == 0
+
+
+def test_sidebar_embed_model_default(qtbot):
+    from gui import ContextSidebar
+    from LocalfileAgent import DEFAULT_EMBED_MODEL
+    sb = ContextSidebar()
+    qtbot.addWidget(sb)
+    assert sb.embed_model() == DEFAULT_EMBED_MODEL

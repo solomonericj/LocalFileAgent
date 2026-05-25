@@ -309,6 +309,7 @@ class FileItemWidget(QWidget):
 class ContextSidebar(QWidget):
     files_changed = Signal()        # emitted on any add/remove
     model_changed = Signal(str)     # emitted when model combo changes
+    embed_model_changed = Signal(str)  # emitted when embed-model combo changes
 
     MAX_CONTEXT_TOKENS = 32_000
 
@@ -337,6 +338,18 @@ class ContextSidebar(QWidget):
         self._model_combo.addItem(DEFAULT_MODEL)
         self._model_combo.currentTextChanged.connect(self.model_changed.emit)
         layout.addWidget(self._model_combo)
+
+        embed_lbl = QLabel("EMBED MODEL")
+        embed_lbl.setStyleSheet(
+            "font-size: 9px; color: #64748b; letter-spacing: 1px; font-weight: 600;"
+        )
+        layout.addWidget(embed_lbl)
+
+        self._embed_combo = QComboBox()
+        self._embed_combo.setEditable(True)
+        self._embed_combo.addItem(DEFAULT_EMBED_MODEL)
+        self._embed_combo.currentTextChanged.connect(self.embed_model_changed.emit)
+        layout.addWidget(self._embed_combo)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -421,6 +434,9 @@ class ContextSidebar(QWidget):
     def model(self) -> str:
         return self._model_combo.currentText().strip()
 
+    def embed_model(self) -> str:
+        return self._embed_combo.currentText().strip()
+
     def set_model_list(self, models: list[str]):
         current = self.model()
         self._model_combo.clear()
@@ -428,6 +444,18 @@ class ContextSidebar(QWidget):
         idx = self._model_combo.findText(current)
         if idx >= 0:
             self._model_combo.setCurrentIndex(idx)
+
+        current_embed = self.embed_model()
+        self._embed_combo.clear()
+        embed_choices = list(models) if models else []
+        if DEFAULT_EMBED_MODEL not in embed_choices:
+            embed_choices.insert(0, DEFAULT_EMBED_MODEL)
+        self._embed_combo.addItems(embed_choices)
+        eidx = self._embed_combo.findText(current_embed)
+        if eidx >= 0:
+            self._embed_combo.setCurrentIndex(eidx)
+        else:
+            self._embed_combo.setEditText(current_embed or DEFAULT_EMBED_MODEL)
 
     def add_path(self, path_str: str) -> bool:
         """Add a file. Returns False if already present."""
@@ -660,6 +688,7 @@ class MainWindow(QMainWindow):
         self._chat_messages: list = []
         self._chat_files_loaded = False
         self._chat_generation = 0
+        self._rag_index = None            # cached VectorIndex for the loaded files
 
         # Streaming state
         self._stream_block: int | None = None   # QTextDocument block number
@@ -694,6 +723,7 @@ class MainWindow(QMainWindow):
         self._sidebar.setFixedWidth(260)
         self._sidebar.files_changed.connect(self._on_files_changed)
         self._sidebar.model_changed.connect(self._on_model_changed)
+        self._sidebar.embed_model_changed.connect(self._on_embed_model_changed)
         body_layout.addWidget(self._sidebar)
 
         body_layout.addWidget(self._build_chat_panel(), 1)
@@ -802,12 +832,19 @@ class MainWindow(QMainWindow):
 
     def _on_files_changed(self):
         self._chat_files_loaded = False
+        self._rag_index = None
         self._rebuild_summarize_strip()
 
     def _on_model_changed(self, _new_model: str):
         if self._chat_files_loaded:
             self._chat_files_loaded = False
             self._append_system("Model changed — context will reload on next message.")
+
+    def _on_embed_model_changed(self, _new_model: str):
+        self._rag_index = None
+        if self._chat_files_loaded:
+            self._chat_files_loaded = False
+            self._append_system("Embed model changed — files will re-index on next message.")
 
     # ── chat helpers ──────────────────────────────────────────────────────────────
 
@@ -905,6 +942,8 @@ class MainWindow(QMainWindow):
 
         generation = self._chat_generation
 
+        embed_model = self._sidebar.embed_model() or DEFAULT_EMBED_MODEL
+
         if not self._chat_files_loaded:
             valid_paths = self._sidebar.get_valid_paths()
             if not valid_paths:
@@ -917,20 +956,28 @@ class MainWindow(QMainWindow):
                 self._append_system(
                     f"⚠  Only first {CONTEXT_FILE_CAP} of {len(valid_paths)} files loaded (token limit)."
                 )
-            self._append_system(f"Loading {len(files)} file(s) into context…")
+            self._append_system(f"Indexing {len(files)} file(s)…")
             self._append_chat("You", user_text, "#3b82f6")
 
             self._chat_worker = StreamingChatWorker(
-                [], model, files_to_load=files, user_text=user_text
+                [], model, files_to_load=files, user_text=user_text,
+                embed_model=embed_model,
             )
             self._chat_worker.context_info.connect(self._on_context_info)
+            self._chat_worker.index_ready.connect(self._on_index_ready)
             self._chat_worker.file_status.connect(
                 lambda p, s, t: self._sidebar.set_file_status(p, s, t)
             )
+            busy_msg = "Indexing…"
         else:
             self._chat_messages.append({"role": "user", "content": user_text})
             self._append_chat("You", user_text, "#3b82f6")
-            self._chat_worker = StreamingChatWorker(list(self._chat_messages), model)
+            self._chat_worker = StreamingChatWorker(
+                list(self._chat_messages), model,
+                rag_index=self._rag_index, embed_model=embed_model,
+                user_text=user_text,
+            )
+            busy_msg = "Thinking…"
 
         self._start_stream_bubble(model)
         self._chat_worker.token_ready.connect(self._on_token_ready)
@@ -938,12 +985,15 @@ class MainWindow(QMainWindow):
             lambda msgs, g=generation: self._on_chat_reply(msgs, g)
         )
         self._chat_worker.error.connect(self._on_chat_error)
-        self._set_busy("Thinking…")
+        self._set_busy(busy_msg)
         self._chat_worker.start()
 
     def _on_context_info(self, info: str):
         self._append_system(info)
         self._chat_files_loaded = True
+
+    def _on_index_ready(self, index):
+        self._rag_index = index
 
     def _on_chat_reply(self, updated_messages: list, generation: int):
         self._finish_stream()
@@ -966,10 +1016,11 @@ class MainWindow(QMainWindow):
 
     def _auto_save(self):
         session = {
-            "model":     self._sidebar.model(),
-            "files":     self._sidebar.get_paths(),
-            "messages":  self._chat_messages,
-            "summaries": self._summarize_results,
+            "model":       self._sidebar.model(),
+            "embed_model": self._sidebar.embed_model(),
+            "files":       self._sidebar.get_paths(),
+            "messages":    self._chat_messages,
+            "summaries":   self._summarize_results,
         }
         try:
             self._session_manager.save(session)
@@ -990,6 +1041,7 @@ class MainWindow(QMainWindow):
     def _new_session(self):
         self._chat_history.clear()
         self._chat_messages = []
+        self._rag_index = None
         self._chat_files_loaded = False
         self._chat_generation += 1
         self._summarize_results = {}
@@ -1006,6 +1058,14 @@ class MainWindow(QMainWindow):
         idx = self._sidebar._model_combo.findText(model_name)
         if idx >= 0:
             self._sidebar._model_combo.setCurrentIndex(idx)
+
+        embed_name = session.get("embed_model", DEFAULT_EMBED_MODEL)
+        eidx = self._sidebar._embed_combo.findText(embed_name)
+        if eidx >= 0:
+            self._sidebar._embed_combo.setCurrentIndex(eidx)
+        else:
+            self._sidebar._embed_combo.setEditText(embed_name)
+
         self._sidebar.populate_from_paths(session.get("files", []))
         self._chat_messages = session.get("messages", [])
         self._summarize_results = session.get("summaries", {})
