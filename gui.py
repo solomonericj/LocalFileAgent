@@ -651,10 +651,143 @@ class MainWindow(QMainWindow):
         sb = self._chat_history.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    # â”€â”€ placeholder stubs (implemented in Tasks 7â€“9) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    def _append_chat(self, label: str, text: str, color: str):
+        escaped_label = html.escape(label)
+        escaped_text = html.escape(text).replace("\n", "<br>")
+        self._chat_history.append(
+            f'<p><b><span style="color:{color}">{escaped_label}:</span></b>'
+            f" {escaped_text}</p>"
+        )
+        sb = self._chat_history.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _start_stream_bubble(self, model_name: str):
+        """Append an empty assistant bubble; track its block for token insertion."""
+        escaped = html.escape(model_name)
+        self._chat_history.append(
+            f'<p><b><span style="color:#16a34a">{escaped}:</span></b> ▌</p>'
+        )
+        self._stream_block = self._chat_history.document().blockCount() - 1
+        self._stream_text = ""
+        sb = self._chat_history.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_token_ready(self, token: str):
+        """Insert token before the ▌ cursor in the streaming bubble."""
+        doc = self._chat_history.document()
+        block = doc.findBlockByNumber(self._stream_block)
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        # Select and replace the trailing ▌ with token + new ▌
+        cursor.movePosition(
+            QTextCursor.MoveOperation.PreviousCharacter,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.insertText(token + "▌")
+        self._stream_text += token
+        sb = self._chat_history.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _finish_stream(self):
+        """Remove the ▌ cursor character from the completed bubble."""
+        if self._stream_block is None:
+            return
+        doc = self._chat_history.document()
+        block = doc.findBlockByNumber(self._stream_block)
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.PreviousCharacter,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.removeSelectedText()
+        self._stream_block = None
+
+    def _set_chat_input_enabled(self, enabled: bool):
+        self._send_btn.setEnabled(enabled)
+        self._chat_input.setEnabled(enabled)
+
+    # -- chat send and reply handlers --
 
     def _send_chat(self):
-        pass
+        user_text = self._chat_input.text().strip()
+        if not user_text:
+            return
+
+        model = self._sidebar.model()
+        if not model:
+            QMessageBox.warning(self, "No Model", "Please select or enter a model name.")
+            return
+
+        self._chat_input.clear()
+        self._set_chat_input_enabled(False)
+
+        generation = self._chat_generation
+
+        if not self._chat_files_loaded:
+            all_paths = self._sidebar.get_paths()
+            valid_paths = [
+                p for p in all_paths
+                if self._sidebar._items[p].status() != FileItemWidget.STATUS_DELETED
+            ]
+            if not valid_paths:
+                QMessageBox.warning(self, "No Files", "Please add files or a folder first.")
+                self._set_chat_input_enabled(True)
+                return
+
+            files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
+            if len(valid_paths) > CONTEXT_FILE_CAP:
+                self._append_system(
+                    f"⚠  Only first {CONTEXT_FILE_CAP} of {len(valid_paths)} files loaded (token limit)."
+                )
+            self._append_system(f"Loading {len(files)} file(s) into context…")
+            self._append_chat("You", user_text, "#3b82f6")
+
+            self._chat_worker = StreamingChatWorker(
+                [], model, files_to_load=files, user_text=user_text
+            )
+            self._chat_worker.context_info.connect(self._on_context_info)
+            self._chat_worker.file_status.connect(
+                lambda p, s, t: self._sidebar.set_file_status(p, s, t)
+            )
+        else:
+            self._chat_messages.append({"role": "user", "content": user_text})
+            self._append_chat("You", user_text, "#3b82f6")
+            self._chat_worker = StreamingChatWorker(list(self._chat_messages), model)
+
+        self._start_stream_bubble(model)
+        self._chat_worker.token_ready.connect(self._on_token_ready)
+        self._chat_worker.finished.connect(
+            lambda msgs, g=generation: self._on_chat_reply(msgs, g)
+        )
+        self._chat_worker.error.connect(self._on_chat_error)
+        self._chat_worker.start()
+
+    def _on_context_info(self, info: str):
+        self._append_system(info)
+        self._chat_files_loaded = True
+
+    def _on_chat_reply(self, updated_messages: list, generation: int):
+        self._finish_stream()
+        if generation != self._chat_generation:
+            self._set_chat_input_enabled(True)
+            return
+        self._chat_messages = updated_messages
+        self._set_chat_input_enabled(True)
+        self._chat_input.setFocus()
+        self._auto_save()
+
+    def _on_chat_error(self, msg: str):
+        self._finish_stream()
+        if self._stream_text:
+            self._append_system("(response interrupted)")
+        self._set_chat_input_enabled(True)
+        QMessageBox.critical(self, "Ollama Error", msg)
+
+    def _auto_save(self):
+        pass   # implemented in Task 9
+
+    # -- placeholder stubs (implemented in Tasks 8-9) --
 
     def _open_sessions(self):
         pass
@@ -664,10 +797,6 @@ class MainWindow(QMainWindow):
 
     def _copy_all_summaries(self):
         pass
-
-    def _set_chat_input_enabled(self, enabled: bool):
-        self._send_btn.setEnabled(enabled)
-        self._chat_input.setEnabled(enabled)
 
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
