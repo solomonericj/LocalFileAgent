@@ -87,6 +87,22 @@ def _post(url: str, payload: dict, timeout: int = 6000) -> dict:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
+        model = payload.get("model", "?")
+        if exc.code == 404:
+            raise ValueError(
+                f"Ollama model '{model}' is not pulled.\n"
+                f"Run:  ollama pull {model}"
+            ) from exc
+        raise ConnectionError(
+            f"Ollama returned HTTP {exc.code} for model '{model}'."
+            + (f"\n{body}" if body else "")
+        ) from exc
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise TimeoutError(
@@ -94,8 +110,8 @@ def _post(url: str, payload: dict, timeout: int = 6000) -> dict:
                 "the file may be too large for this model."
             ) from exc
         raise ConnectionError(
-            "Cannot reach Ollama.\n"
-            "Make sure Ollama is running: https://ollama.com"
+            "Cannot reach Ollama at http://localhost:11434.\n"
+            "Make sure the local Ollama daemon is running ('ollama serve')."
         ) from exc
 
 
@@ -169,8 +185,8 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
                 "Ollama did not respond — the file may be too large for this model."
             ) from exc
         raise ConnectionError(
-            "Cannot reach Ollama.\n"
-            "Make sure Ollama is running: https://ollama.com"
+            "Cannot reach Ollama at http://localhost:11434.\n"
+            "Make sure the local Ollama daemon is running ('ollama serve')."
         ) from exc
 
 
