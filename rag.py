@@ -48,3 +48,46 @@ def chunk_text(text: str, path: Path, *, size: int = CHUNK_SIZE,
             break
         start += step
     return chunks
+
+
+def _require_numpy():
+    try:
+        import numpy as np  # noqa: F401
+        return np
+    except ImportError as exc:
+        raise ImportError(
+            "RAG needs numpy — install it:  pip install numpy\n"
+            "(or run chat with --no-rag to use plain context-stuffing)"
+        ) from exc
+
+
+class VectorIndex:
+    """In-memory store of L2-normalized chunk vectors with cosine search."""
+
+    def __init__(self):
+        self.chunks: list[Chunk] = []
+        self.vectors = None   # numpy array (N, d) or None
+
+    def __len__(self) -> int:
+        return len(self.chunks)
+
+    def add(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
+        if not chunks:
+            return
+        np = _require_numpy()
+        v = np.asarray(vectors, dtype=np.float32)
+        norms = np.linalg.norm(v, axis=1, keepdims=True)
+        v = v / np.maximum(norms, 1e-8)
+        self.vectors = v if self.vectors is None else np.vstack([self.vectors, v])
+        self.chunks.extend(chunks)
+
+    def search(self, query_vector: list[float], k: int) -> list[tuple[Chunk, float]]:
+        if self.vectors is None or len(self.chunks) == 0:
+            return []
+        np = _require_numpy()
+        q = np.asarray(query_vector, dtype=np.float32)
+        q = q / max(float(np.linalg.norm(q)), 1e-8)
+        sims = self.vectors @ q
+        k = min(k, len(self.chunks))
+        top = np.argsort(-sims)[:k]
+        return [(self.chunks[i], float(sims[i])) for i in top]
