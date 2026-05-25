@@ -41,6 +41,12 @@ def test_raises_timeout_on_socket_timeout():
             list(stream_ollama_chat([{"role": "user", "content": "hi"}], "mistral"))
 
 
+def test_raises_timeout_on_builtin_timeout():
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError(TimeoutError())):
+        with pytest.raises(TimeoutError):
+            list(stream_ollama_chat([{"role": "user", "content": "hi"}], "mistral"))
+
+
 def test_skips_empty_lines():
     raw = (
         b"\n"

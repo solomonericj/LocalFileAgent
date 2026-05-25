@@ -133,7 +133,10 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
                 line = raw_line.strip()
                 if not line:
                     continue
-                obj = json.loads(line)
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 token = obj.get("message", {}).get("content", "")
                 if token:
                     yield token
