@@ -536,8 +536,7 @@ class SessionDialog(QDialog):
 
     def _load_list(self):
         self._list.clear()
-        self._sessions = self._sm.list()
-        for s in self._sessions:
+        for s in self._sm.list():
             created = s.get("created", "?")
             model   = s.get("model", "?")
             n_files = len(s.get("files", []))
@@ -558,12 +557,20 @@ class SessionDialog(QDialog):
                 self._selected = self._sm.load(path)
             except (OSError, ValueError):
                 self._selected = None
+                self._load_btn.setEnabled(False)
         else:
             self._selected = None
 
     def _delete_selected(self):
         item = self._list.currentItem()
         if not item:
+            return
+        ans = QMessageBox.question(
+            self, "Delete Session",
+            "Permanently delete this session?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
             return
         self._sm.delete(item.data(Qt.ItemDataRole.UserRole))
         self._load_list()
@@ -889,8 +896,10 @@ class MainWindow(QMainWindow):
             return
         if dlg.new_requested():
             self._new_session()
-        elif dlg.selected_session():
-            self._load_session(dlg.selected_session())
+        else:
+            session = dlg.selected_session()
+            if session:
+                self._load_session(session)
 
     def _new_session(self):
         self._chat_history.clear()
@@ -906,7 +915,10 @@ class MainWindow(QMainWindow):
     def _load_session(self, session: dict):
         self._new_session()
 
-        self._sidebar.set_model_list([session.get("model", DEFAULT_MODEL)])
+        model_name = session.get("model", DEFAULT_MODEL)
+        idx = self._sidebar._model_combo.findText(model_name)
+        if idx >= 0:
+            self._sidebar._model_combo.setCurrentIndex(idx)
         self._sidebar.populate_from_paths(session.get("files", []))
         self._chat_messages = session.get("messages", [])
         self._summarize_results = session.get("summaries", {})
@@ -916,7 +928,7 @@ class MainWindow(QMainWindow):
             if msg["role"] == "user":
                 self._append_chat("You", msg["content"], "#3b82f6")
             elif msg["role"] == "assistant":
-                model = session.get("model", "model")
+                model = session.get("model", DEFAULT_MODEL)
                 self._append_chat(model, msg["content"], "#16a34a")
 
         for path_str, summary in self._summarize_results.items():
