@@ -139,6 +139,10 @@ class StreamingChatWorker(QThread):
 
         except (ConnectionError, TimeoutError) as exc:
             self.error.emit(str(exc))
+        except RuntimeError as exc:
+            # Expected, user-facing failures (e.g. no readable content) — emit
+            # the message as-is rather than wrapping it as "Unexpected error".
+            self.error.emit(str(exc))
         except Exception as exc:
             self.error.emit(f"Unexpected error: {exc}")
 
@@ -147,6 +151,8 @@ class StreamingChatWorker(QThread):
         try:
             index = build_index(self.files_to_load, self.embed_model)
         except ImportError:
+            # numpy missing (raised via rag._require_numpy) — fall back to
+            # full-context stuffing instead of failing the whole turn.
             return None
         if len(index) == 0:
             return None
@@ -154,7 +160,11 @@ class StreamingChatWorker(QThread):
             f"Indexed {len(index)} chunk(s) from {len(self.files_to_load)} file(s)"
         )
         for path in self.files_to_load:
-            self.file_status.emit(str(path), FileItemWidget.STATUS_LOADED, 0)
+            try:
+                est = path.stat().st_size // 4   # rough token estimate for the sidebar
+            except OSError:
+                est = 0
+            self.file_status.emit(str(path), FileItemWidget.STATUS_LOADED, est)
         return index
 
     def _load_full_context(self):
