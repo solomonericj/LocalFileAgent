@@ -417,10 +417,23 @@ class ContextSidebar(QWidget):
     def populate_from_paths(self, paths: list[str]):
         """Restore file list (e.g., from a loaded session)."""
         self.clear_files()
-        for p in paths:
-            self.add_path(p)
-            if not Path(p).exists():
-                self.set_file_status(p, FileItemWidget.STATUS_DELETED)
+        self.blockSignals(True)
+        try:
+            for p in paths:
+                self.add_path(p)
+                if not Path(p).exists():
+                    self.set_file_status(p, FileItemWidget.STATUS_DELETED)
+        finally:
+            self.blockSignals(False)
+        self._refresh_counts()
+        self.files_changed.emit()
+
+    def get_valid_paths(self) -> list[str]:
+        """Return paths that are not marked as deleted."""
+        return [
+            p for p, w in self._items.items()
+            if w.status() != FileItemWidget.STATUS_DELETED
+        ]
 
     # â”€â”€ private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -824,11 +837,7 @@ class MainWindow(QMainWindow):
         generation = self._chat_generation
 
         if not self._chat_files_loaded:
-            all_paths = self._sidebar.get_paths()
-            valid_paths = [
-                p for p in all_paths
-                if self._sidebar._items[p].status() != FileItemWidget.STATUS_DELETED
-            ]
+            valid_paths = self._sidebar.get_valid_paths()
             if not valid_paths:
                 QMessageBox.warning(self, "No Files", "No accessible files. Check for deleted files in the sidebar.")
                 self._set_chat_input_enabled(True)
@@ -1018,13 +1027,13 @@ class MainWindow(QMainWindow):
         lines = ["# File Summaries\n"]
         for path_str, summary in self._summarize_results.items():
             p = Path(path_str)
-            lines += [f"## `{p.name}`", f"**Path:** `{path_str}`\n", summary, ""]
+            lines += [f"## `{p.name}`", "", f"**Path:** `{path_str}`", "", summary, ""]
         try:
             output.write_text("\n".join(lines), encoding="utf-8")
         except OSError as exc:
             QMessageBox.critical(self, "Save Error", f"Could not write file:\n{exc}")
             return
-        self._status_bar.showMessage(f"Summaries saved to {output}")
+        self._status_bar.showMessage(f"Summaries saved to {str(output)}")
 
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
