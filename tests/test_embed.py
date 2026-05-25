@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from LocalfileAgent import embed_ollama
+from LocalfileAgent import embed_ollama, check_ollama_available
 
 
 def _fake_json_response(payload: dict):
@@ -53,3 +53,18 @@ def test_raises_when_no_embeddings_returned():
     with patch("urllib.request.urlopen", return_value=resp):
         with pytest.raises(ValueError):
             embed_ollama(["x"], "nomic-embed-text")
+
+
+def _tags_response(names):
+    return _fake_json_response({"models": [{"name": n} for n in names]})
+
+
+def test_check_passes_when_both_models_present():
+    with patch("urllib.request.urlopen", return_value=_tags_response(["mistral", "nomic-embed-text"])):
+        check_ollama_available("mistral", embed_model="nomic-embed-text")  # no SystemExit
+
+
+def test_check_exits_when_embed_model_missing():
+    with patch("urllib.request.urlopen", return_value=_tags_response(["mistral"])):
+        with pytest.raises(SystemExit):
+            check_ollama_available("mistral", embed_model="nomic-embed-text")

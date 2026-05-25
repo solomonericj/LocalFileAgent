@@ -185,18 +185,20 @@ def embed_ollama(texts: list[str], model: str) -> list[list[float]]:
     return embeddings
 
 
-def check_ollama_available(model: str) -> None:
-    """Verify Ollama is reachable and the requested model is pulled."""
+def check_ollama_available(model: str, embed_model: str | None = None) -> None:
+    """Verify Ollama is reachable and the requested model(s) are pulled."""
     try:
         req = urllib.request.Request(OLLAMA_TAGS)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
         available = [m["name"].split(":")[0] for m in data.get("models", [])]
-        if model.split(":")[0] not in available:
+        wanted = [model] + ([embed_model] if embed_model else [])
+        missing = [m for m in wanted if m.split(":")[0] not in available]
+        if missing:
             print(
-                f"⚠  Model '{model}' not found locally.\n"
+                f"⚠  Model(s) not found locally: {', '.join(missing)}\n"
                 f"   Available: {', '.join(available) or 'none'}\n"
-                f"   Pull it with:  ollama pull {model}\n",
+                f"   Pull with:  {'; '.join(f'ollama pull {m}' for m in missing)}\n",
                 file=sys.stderr,
             )
             sys.exit(1)
