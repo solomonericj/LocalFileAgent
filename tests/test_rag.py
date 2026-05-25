@@ -104,3 +104,55 @@ def test_cache_miss_on_different_model(tmp_path, monkeypatch):
     f.write_text("hello")
     save_cache(f, "nomic-embed-text", [Chunk("doc.txt", str(f), "hello", 0)], [[0.1]])
     assert load_cached(f, "other-model") is None
+
+
+from rag import build_index, retrieve, build_rag_prompt
+
+
+def _fake_embedder(call_log=None):
+    """Deterministic embedder: vector = [len(text), count('a')]."""
+    def embed(texts, model):
+        if call_log is not None:
+            call_log.extend(texts)
+        return [[float(len(t)), float(t.count("a"))] for t in texts]
+    return embed
+
+
+def test_build_index_embeds_and_caches(tmp_path, monkeypatch):
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("banana apple")
+    log = []
+    idx = build_index([f], "nomic-embed-text", embed_fn=_fake_embedder(log))
+    assert len(idx) >= 1
+    assert log  # embedder was called on first build
+
+    # Second build hits cache — embedder NOT called again
+    log2 = []
+    idx2 = build_index([f], "nomic-embed-text", embed_fn=_fake_embedder(log2))
+    assert len(idx2) == len(idx)
+    assert log2 == []
+
+
+def test_retrieve_returns_relevant_chunks(tmp_path, monkeypatch):
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("aaaa")
+    idx = build_index([f], "m", embed_fn=_fake_embedder())
+    chunks = retrieve(idx, "aaaa", "m", k=1, embed_fn=_fake_embedder())
+    assert len(chunks) == 1
+    assert isinstance(chunks[0], Chunk)
+
+
+def test_build_rag_prompt_formats_context():
+    chunks = [Chunk("a.txt", "a.txt", "first", 0), Chunk("b.txt", "b.txt", "second", 0)]
+    prompt = build_rag_prompt(chunks, "What is X?")
+    assert "[a.txt]" in prompt and "first" in prompt
+    assert "[b.txt]" in prompt and "second" in prompt
+    assert prompt.rstrip().endswith("What is X?")
+
+
+def test_build_rag_prompt_no_chunks_passthrough():
+    assert build_rag_prompt([], "just this") == "just this"

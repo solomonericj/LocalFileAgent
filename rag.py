@@ -133,3 +133,49 @@ def load_cached(path: Path, embed_model: str) -> Optional[tuple[list[Chunk], lis
         return chunks, vectors
     except (OSError, ValueError, KeyError):
         return None
+
+
+def build_index(files, embed_model: str, *,
+                embed_fn: Optional[Callable] = None) -> VectorIndex:
+    """Read, chunk, embed (cache-aware), and index the given files."""
+    from LocalfileAgent import read_file_safe, embed_ollama
+    embed_fn = embed_fn or embed_ollama
+
+    index = VectorIndex()
+    for path in files:
+        path = Path(path)
+        cached = load_cached(path, embed_model)
+        if cached is not None:
+            chunks, vectors = cached
+            index.add(chunks, vectors)
+            continue
+
+        content = read_file_safe(path)
+        if content is None:
+            continue
+        chunks = chunk_text(content, path)
+        if not chunks:
+            continue
+        vectors = embed_fn([c.text for c in chunks], embed_model)
+        save_cache(path, embed_model, chunks, vectors)
+        index.add(chunks, vectors)
+    return index
+
+
+def retrieve(index: VectorIndex, query: str, embed_model: str, k: int = DEFAULT_TOP_K, *,
+             embed_fn: Optional[Callable] = None) -> list[Chunk]:
+    """Embed the query and return the top-k most similar chunks."""
+    if len(index) == 0:
+        return []
+    from LocalfileAgent import embed_ollama
+    embed_fn = embed_fn or embed_ollama
+    query_vec = embed_fn([query], embed_model)[0]
+    return [chunk for chunk, _score in index.search(query_vec, k)]
+
+
+def build_rag_prompt(chunks: list[Chunk], user_text: str) -> str:
+    """Compose the per-turn user message: context excerpts + question."""
+    if not chunks:
+        return user_text
+    ctx = "\n\n".join(f"[{c.source}]\n{c.text}" for c in chunks)
+    return f"Context excerpts:\n{ctx}\n\nQuestion: {user_text}"
