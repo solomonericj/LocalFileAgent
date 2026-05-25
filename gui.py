@@ -793,10 +793,60 @@ class MainWindow(QMainWindow):
         pass
 
     def _rebuild_summarize_strip(self):
-        pass
+        """Rebuild per-file summarize buttons to match current sidebar file list."""
+        # Clear existing buttons
+        while self._summarize_btns_layout.count():
+            item = self._summarize_btns_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        paths = self._sidebar.get_paths()
+        if not paths:
+            self._summarize_strip.setVisible(False)
+            return
+
+        self._summarize_strip.setVisible(True)
+        for path_str in paths:
+            name = Path(path_str).name
+            btn = QPushButton(f"{name} ▶")
+            btn.setStyleSheet("font-size: 10px;")
+            btn.clicked.connect(lambda checked=False, p=path_str: self._run_single_summarize(p))
+            self._summarize_btns_layout.addWidget(btn)
+
+    def _run_single_summarize(self, path_str: str):
+        model = self._sidebar.model()
+        self._set_chat_input_enabled(False)
+        self._append_system(f"Summarizing {Path(path_str).name}…")
+
+        self._summarize_worker = SummarizeWorker([Path(path_str)], model)
+        self._summarize_worker.file_done.connect(self._on_summarize_done)
+        self._summarize_worker.finished.connect(
+            lambda: self._set_chat_input_enabled(True)
+        )
+        self._summarize_worker.error.connect(self._on_summarize_error)
+        self._summarize_worker.start()
+
+    def _on_summarize_done(self, path_str: str, summary: str):
+        self._summarize_results[path_str] = summary
+        name = Path(path_str).name
+        self._append_system(f"── Summary: {name} ──")
+        self._append_chat("Summary", summary, "#7c3aed")
+        self._copy_all_btn.setEnabled(bool(self._summarize_results))
+        self._auto_save()
+
+    def _on_summarize_error(self, msg: str):
+        self._set_chat_input_enabled(True)
+        QMessageBox.critical(self, "Summarize Error", msg)
 
     def _copy_all_summaries(self):
-        pass
+        if not self._summarize_results:
+            return
+        lines = []
+        for path_str, summary in self._summarize_results.items():
+            lines.append(f"## {Path(path_str).name}\n\n{summary}\n")
+        text = "\n".join(lines)
+        QApplication.clipboard().setText(text)
+        self._status_bar.showMessage("Summaries copied to clipboard.")
 
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
