@@ -1,0 +1,4 @@
+# Runtime dependencies for LocalFileAgent.
+# Binary-format extractors (pypdf, python-docx, openpyxl, python-pptx, xlrd,
+# pywin32) are optional and lazy-imported — install only what you need.
+numpy>=1.24
