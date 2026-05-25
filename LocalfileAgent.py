@@ -129,6 +129,7 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
     )
     try:
         with urllib.request.urlopen(req, timeout=6000) as resp:
+            phase: str | None = None  # None | "thinking" | "content"
             for raw_line in resp:
                 line = raw_line.strip()
                 if not line:
@@ -137,9 +138,19 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                token = obj.get("message", {}).get("content", "")
-                if token:
-                    yield token
+                msg = obj.get("message", {})
+                thinking = msg.get("thinking", "")
+                content = msg.get("content", "")
+                if thinking:
+                    if phase != "thinking":
+                        yield "💭 " if phase is None else "\n\n💭 "
+                        phase = "thinking"
+                    yield thinking
+                if content:
+                    if phase == "thinking":
+                        yield "\n\n"
+                    phase = "content"
+                    yield content
                 if obj.get("done"):
                     break
     except urllib.error.URLError as exc:
