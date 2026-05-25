@@ -492,6 +492,93 @@ class ContextSidebar(QWidget):
         event.acceptProposedAction()
 
 
+class SessionDialog(QDialog):
+    def __init__(self, session_manager: SessionManager, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sessions")
+        self.setMinimumSize(640, 380)
+        self._sm = session_manager
+        self._selected: dict | None = None
+        self._new_requested = False
+        self._build_ui()
+        self._load_list()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        self._list = QListWidget()
+        self._list.itemSelectionChanged.connect(self._on_sel_changed)
+        layout.addWidget(self._list)
+
+        btn_row = QHBoxLayout()
+
+        self._load_btn = QPushButton("Load Session")
+        self._load_btn.setEnabled(False)
+        self._load_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self._load_btn)
+
+        self._del_btn = QPushButton("Delete")
+        self._del_btn.setEnabled(False)
+        self._del_btn.clicked.connect(self._delete_selected)
+        btn_row.addWidget(self._del_btn)
+
+        btn_row.addStretch()
+
+        new_btn = QPushButton("New Session")
+        new_btn.clicked.connect(self._on_new)
+        btn_row.addWidget(new_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        layout.addLayout(btn_row)
+
+    def _load_list(self):
+        self._list.clear()
+        self._sessions = self._sm.list()
+        for s in self._sessions:
+            created = s.get("created", "?")
+            model   = s.get("model", "?")
+            n_files = len(s.get("files", []))
+            user_msgs = [m for m in s.get("messages", []) if m["role"] == "user"]
+            preview = (user_msgs[0]["content"][:60] + "\u2026") if user_msgs else "(no messages)"
+            label = f"{created}  \u00b7  {model}  \u00b7  {n_files} file(s)  \u00b7  {preview}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, s["_path"])
+            self._list.addItem(item)
+
+    def _on_sel_changed(self):
+        has = bool(self._list.selectedItems())
+        self._load_btn.setEnabled(has)
+        self._del_btn.setEnabled(has)
+        if has:
+            path = self._list.currentItem().data(Qt.ItemDataRole.UserRole)
+            try:
+                self._selected = self._sm.load(path)
+            except (OSError, ValueError):
+                self._selected = None
+        else:
+            self._selected = None
+
+    def _delete_selected(self):
+        item = self._list.currentItem()
+        if not item:
+            return
+        self._sm.delete(item.data(Qt.ItemDataRole.UserRole))
+        self._load_list()
+
+    def _on_new(self):
+        self._new_requested = True
+        self.accept()
+
+    def selected_session(self) -> dict | None:
+        return self._selected
+
+    def new_requested(self) -> bool:
+        return self._new_requested
+
+
 # â”€â”€ Main Window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class MainWindow(QMainWindow):
@@ -785,12 +872,62 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Ollama Error", msg)
 
     def _auto_save(self):
-        pass   # implemented in Task 9
-
-    # -- placeholder stubs (implemented in Tasks 8-9) --
+        session = {
+            "model":     self._sidebar.model(),
+            "files":     self._sidebar.get_paths(),
+            "messages":  self._chat_messages,
+            "summaries": self._summarize_results,
+        }
+        try:
+            self._session_manager.save(session)
+        except OSError:
+            pass   # non-fatal; don't interrupt the user
 
     def _open_sessions(self):
-        pass
+        dlg = SessionDialog(self._session_manager, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dlg.new_requested():
+            self._new_session()
+        elif dlg.selected_session():
+            self._load_session(dlg.selected_session())
+
+    def _new_session(self):
+        self._chat_history.clear()
+        self._chat_messages = []
+        self._chat_files_loaded = False
+        self._chat_generation += 1
+        self._summarize_results = {}
+        self._sidebar.clear_files()
+        self._rebuild_summarize_strip()
+        self._copy_all_btn.setEnabled(False)
+        self._status_bar.showMessage("New session started.")
+
+    def _load_session(self, session: dict):
+        self._new_session()
+
+        self._sidebar.set_model_list([session.get("model", DEFAULT_MODEL)])
+        self._sidebar.populate_from_paths(session.get("files", []))
+        self._chat_messages = session.get("messages", [])
+        self._summarize_results = session.get("summaries", {})
+
+        # Replay visible history from messages (skip system prompt)
+        for msg in self._chat_messages:
+            if msg["role"] == "user":
+                self._append_chat("You", msg["content"], "#3b82f6")
+            elif msg["role"] == "assistant":
+                model = session.get("model", "model")
+                self._append_chat(model, msg["content"], "#16a34a")
+
+        for path_str, summary in self._summarize_results.items():
+            self._append_system(f"\u2500\u2500 Summary: {Path(path_str).name} \u2500\u2500")
+            self._append_chat("Summary", summary, "#7c3aed")
+
+        if self._chat_messages:
+            self._chat_files_loaded = True
+        self._rebuild_summarize_strip()
+        self._copy_all_btn.setEnabled(bool(self._summarize_results))
+        self._status_bar.showMessage(f"Session loaded \u2014 {len(self._sidebar.get_paths())} file(s).")
 
     def _rebuild_summarize_strip(self):
         """Rebuild per-file summarize buttons to match current sidebar file list."""
