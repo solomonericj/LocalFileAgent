@@ -11,7 +11,7 @@ Chat mode uses **RAG** (retrieval-augmented generation): your files are chunked 
 - **RAG-powered chat** — files are indexed once (with a pickable embedding model); each question retrieves the most relevant chunks
 - **Context sidebar** — always shows loaded files with status badges (✓ loaded / ⚠ skipped / deleted), per-file token estimates, a live token progress bar, and **model + embed-model pickers**
 - **Streaming responses** — model replies render token-by-token with a blinking cursor; UI stays responsive throughout
-- **Busy indicator** — an animated status-bar bar shows when the app is working (Indexing… / Thinking… / Responding… / Summarizing…) so it never looks frozen
+- **Busy indicator** — an animated status-bar bar with a live elapsed-time timer shows when the app is working (Indexing… / Thinking… / Responding… / Summarizing…) so it never looks frozen
 - **Per-file summarization** — click any file's button in the summarize strip to generate a summary; copy all as Markdown or save to a `.md` file
 - **Session history** — sessions auto-save after every reply; browse, load, or delete past sessions via the Sessions panel
 - **Drag-and-drop** — drop files or folders directly onto the sidebar; also use `+ Files` / `+ Folder` buttons

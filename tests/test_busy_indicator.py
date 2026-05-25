@@ -41,3 +41,33 @@ def test_clear_busy_accepts_custom_message(window):
     window._clear_busy("Done")
     assert window._busy_bar.isVisibleTo(window) is False
     assert window._status_bar.currentMessage() == "Done"
+
+
+def test_set_busy_starts_timer(window):
+    window._set_busy("Thinking…")
+    assert window._busy_timer.isActive() is True
+    assert window._timer_label.isVisibleTo(window) is True
+
+
+def test_clear_busy_stops_timer(window):
+    window._set_busy("Thinking…")
+    window._clear_busy()
+    assert window._busy_timer.isActive() is False
+    assert window._timer_label.isVisibleTo(window) is False
+
+
+def test_timer_hidden_initially(window):
+    assert window._busy_timer.isActive() is False
+    assert window._timer_label.isVisibleTo(window) is False
+
+
+def test_format_elapsed_seconds(window):
+    assert window._format_elapsed(0) == "0.0s"
+    assert window._format_elapsed(3400) == "3.4s"
+    assert window._format_elapsed(59900) == "59.9s"
+
+
+def test_format_elapsed_minutes(window):
+    assert window._format_elapsed(60000) == "1:00"
+    assert window._format_elapsed(65000) == "1:05"
+    assert window._format_elapsed(605000) == "10:05"

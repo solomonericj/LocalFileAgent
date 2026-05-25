@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSplitter, QGroupBox, QStatusBar, QMessageBox,
     QFrame, QScrollArea, QDialog,
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QElapsedTimer
 from PySide6.QtGui import QFont, QTextCursor
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -735,9 +735,14 @@ class MainWindow(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
 
-        # Animated "busy" indicator — an indeterminate (range 0,0) progress bar
-        # pinned to the right of the status bar, shown only while a worker runs
-        # so the app never looks frozen during model thinking/indexing.
+        # Elapsed-time readout + animated "busy" indicator, pinned to the right
+        # of the status bar and shown only while a worker runs, so the app never
+        # looks frozen during model thinking/indexing.
+        self._timer_label = QLabel()
+        self._timer_label.setStyleSheet("font-size: 10px; color: #64748b; padding-right: 4px;")
+        self._timer_label.hide()
+        self._status_bar.addPermanentWidget(self._timer_label)
+
         self._busy_bar = QProgressBar()
         self._busy_bar.setRange(0, 0)
         self._busy_bar.setMaximumWidth(120)
@@ -745,6 +750,12 @@ class MainWindow(QMainWindow):
         self._busy_bar.setTextVisible(False)
         self._busy_bar.hide()
         self._status_bar.addPermanentWidget(self._busy_bar)
+
+        # Ticks the elapsed-time label ~10x/sec while busy.
+        self._busy_elapsed = QElapsedTimer()
+        self._busy_timer = QTimer(self)
+        self._busy_timer.setInterval(100)
+        self._busy_timer.timeout.connect(self._tick_busy)
 
         self._status_bar.showMessage("Ready")
 
@@ -921,14 +932,32 @@ class MainWindow(QMainWindow):
         self._chat_input.setEnabled(enabled)
 
     def _set_busy(self, message: str):
-        """Show the animated busy indicator with a status message."""
+        """Show the animated busy indicator + elapsed timer with a status message."""
         self._status_bar.showMessage(message)
         self._busy_bar.show()
+        self._busy_elapsed.restart()
+        self._timer_label.setText(self._format_elapsed(0))
+        self._timer_label.show()
+        self._busy_timer.start()
 
     def _clear_busy(self, message: str = "Ready"):
-        """Hide the busy indicator and reset the status message."""
+        """Hide the busy indicator + timer and reset the status message."""
+        self._busy_timer.stop()
+        self._timer_label.hide()
         self._busy_bar.hide()
         self._status_bar.showMessage(message)
+
+    def _tick_busy(self):
+        self._timer_label.setText(self._format_elapsed(self._busy_elapsed.elapsed()))
+
+    @staticmethod
+    def _format_elapsed(ms: int) -> str:
+        """Render elapsed milliseconds as '3.4s' under a minute, else 'm:ss'."""
+        seconds = ms / 1000
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{minutes}:{secs:02d}"
 
     # -- chat send and reply handlers --
 
