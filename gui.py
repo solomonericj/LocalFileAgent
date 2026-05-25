@@ -17,17 +17,19 @@ from PySide6.QtWidgets import (
     QTabWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
     QComboBox, QCheckBox, QLineEdit, QTextEdit, QProgressBar,
     QFileDialog, QSplitter, QGroupBox, QStatusBar, QMessageBox,
+    QFrame, QScrollArea, QDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QTextCursor
 
 sys.path.insert(0, str(Path(__file__).parent))
 from LocalfileAgent import (
     SUPPORTED_EXTENSIONS, DEFAULT_MODEL, OLLAMA_TAGS,
     SUMMARISE_SYSTEM, CHAT_SYSTEM_TEMPLATE, CONTEXT_FILE_CAP,
     read_file_safe, collect_files, build_file_block,
-    query_ollama_generate, query_ollama_chat,
+    query_ollama_generate, query_ollama_chat, stream_ollama_chat,
 )
+from session_manager import SessionManager
 
 # ── Workers ────────────────────────────────────────────────────────────────────
 
@@ -62,8 +64,12 @@ class SummarizeWorker(QThread):
             self.progress.emit(i, len(self.files), path.name)
             content = read_file_safe(path)
             if content is None:
-                size = path.stat().st_size
-                summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    summary = "(skipped — file no longer accessible)"
+                else:
+                    summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
             else:
                 try:
                     summary = query_ollama_generate(
@@ -82,19 +88,142 @@ class SummarizeWorker(QThread):
 
 class ChatWorker(QThread):
     reply_ready = Signal(str, list)
+    context_info = Signal(str)   # emitted after file loading on first message
     error = Signal(str)
 
-    def __init__(self, messages: list, model: str):
+    def __init__(self, messages: list, model: str, *,
+                 files_to_load: list = None, user_text: str = None):
         super().__init__()
-        self.messages = messages
+        self.messages = list(messages)   # snapshot — never share the live list
         self.model = model
+        self.files_to_load = files_to_load
+        self.user_text = user_text
 
     def run(self):
         try:
+            if self.files_to_load is not None:
+                file_block, skipped = build_file_block(self.files_to_load)
+                if not file_block.strip():
+                    self.error.emit("No readable content found in the selected files.")
+                    return
+                loaded = len(self.files_to_load) - len(skipped)
+                info = f"Context ready: {loaded} file(s) loaded"
+                if skipped:
+                    info += f", {len(skipped)} skipped ({', '.join(skipped)})"
+                self.context_info.emit(info)
+                system_prompt = CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)
+                self.messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": self.user_text},
+                ]
             reply, updated = query_ollama_chat(self.messages, self.model)
             self.reply_ready.emit(reply, updated)
-        except ConnectionError as exc:
+        except (ConnectionError, TimeoutError) as exc:
             self.error.emit(str(exc))
+
+
+# ── FileItemWidget ─────────────────────────────────────────────────────────────
+
+class FileItemWidget(QWidget):
+    remove_requested = Signal(str)   # emits path_str
+
+    STATUS_PENDING = "pending"
+    STATUS_LOADED  = "loaded"
+    STATUS_SKIPPED = "skipped"
+    STATUS_DELETED = "deleted"
+
+    _STATUS_STYLES = {
+        STATUS_PENDING: ("↻", "#64748b"),
+        STATUS_LOADED:  ("✓", "#22c55e"),
+        STATUS_SKIPPED: ("⚠", "#f59e0b"),
+        STATUS_DELETED: ("✕", "#ef4444"),
+    }
+
+    def __init__(self, path_str: str, parent=None):
+        super().__init__(parent)
+        self._path_str = path_str
+        self._path = Path(path_str)
+        self._status = self.STATUS_PENDING
+        self._token_estimate = self._compute_estimate()
+        self._build_ui()
+
+    def _compute_estimate(self) -> int:
+        try:
+            return self._path.stat().st_size // 4
+        except OSError:
+            return 0
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(1)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self._badge = QLabel("↻")
+        self._badge.setFixedWidth(14)
+        row.addWidget(self._badge)
+
+        self._name_label = QLabel()
+        self._name_label.setToolTip(self._path_str)
+        self._name_label.setStyleSheet("font-size: 11px; color: #1e293b;")
+        row.addWidget(self._name_label, 1)
+
+        self._remove_btn = QPushButton("✕")
+        self._remove_btn.setFixedSize(16, 16)
+        self._remove_btn.setFlat(True)
+        self._remove_btn.setStyleSheet("color: #94a3b8; font-size: 9px; border: none;")
+        self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._path_str))
+        row.addWidget(self._remove_btn)
+        layout.addLayout(row)
+
+        self._token_label = QLabel()
+        layout.addWidget(self._token_label)
+
+        self._refresh_display()
+
+    def _refresh_display(self):
+        icon, color = self._STATUS_STYLES[self._status]
+        self._badge.setText(icon)
+        self._badge.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        fm = self._name_label.fontMetrics()
+        self._name_label.setText(
+            fm.elidedText(self._path.name, Qt.TextElideMode.ElideMiddle, 140)
+        )
+
+        if self._status == self.STATUS_SKIPPED:
+            self._token_label.setText("skipped — too large")
+            self._token_label.setStyleSheet(
+                "font-size: 9px; color: #f59e0b; padding-left: 20px;"
+            )
+        elif self._status == self.STATUS_DELETED:
+            self._token_label.setText("file deleted")
+            self._token_label.setStyleSheet(
+                "font-size: 9px; color: #ef4444; padding-left: 20px;"
+            )
+        else:
+            k = self._token_estimate // 1000
+            self._token_label.setText(f"~{k or '<1'}k tokens")
+            self._token_label.setStyleSheet(
+                "font-size: 9px; color: #94a3b8; padding-left: 20px;"
+            )
+
+    def set_status(self, status: str, token_count: int = None):
+        self._status = status
+        if token_count is not None:
+            self._token_estimate = token_count
+        self._refresh_display()
+
+    def status(self) -> str:
+        return self._status
+
+    def token_estimate(self) -> int:
+        return self._token_estimate
+
+    def path_str(self) -> str:
+        return self._path_str
 
 
 # ── Main Window ────────────────────────────────────────────────────────────────
@@ -108,6 +237,7 @@ class MainWindow(QMainWindow):
 
         self._chat_messages: list = []
         self._chat_files_loaded = False
+        self._chat_generation = 0
         self._summarize_results: list = []
 
         self._build_ui()
@@ -391,7 +521,7 @@ class MainWindow(QMainWindow):
 
     def _on_summarize_finished(self):
         n = len(self._summarize_results)
-        self._progress_bar.setValue(self._progress_bar.maximum())
+        self._progress_bar.setVisible(False)
         self._progress_label.setText(f"Done — {n} file(s) summarized.")
         self._run_btn.setEnabled(True)
         self._save_btn.setEnabled(bool(self._summarize_results))
@@ -423,7 +553,11 @@ class MainWindow(QMainWindow):
             for p_str, summary in self._summarize_results:
                 parts += [sep, f"FILE : {p_str}", sep, summary, ""]
             text = "\n".join(parts)
-        output_path.write_text(text, encoding="utf-8")
+        try:
+            output_path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Error", f"Could not write file:\n{exc}")
+            return
         self._status_bar.showMessage(f"Saved to {output_path}")
 
     # ── Chat ───────────────────────────────────────────────────────────────────
@@ -453,38 +587,34 @@ class MainWindow(QMainWindow):
                 self._append_system(
                     f"⚠  Only first {CONTEXT_FILE_CAP} of {len(files)} files loaded (token limit)."
                 )
-
             self._append_system(f"Loading {len(capped)} file(s) into context…")
-            QApplication.processEvents()
+            self._append_chat("You", user_text, color="#4A90D9")
+            generation = self._chat_generation
+            self._chat_worker = ChatWorker(
+                [], model, files_to_load=capped, user_text=user_text
+            )
+            self._chat_worker.context_info.connect(self._on_context_info)
+        else:
+            self._chat_messages.append({"role": "user", "content": user_text})
+            self._append_chat("You", user_text, color="#4A90D9")
+            generation = self._chat_generation
+            self._chat_worker = ChatWorker(list(self._chat_messages), model)
 
-            file_block, skipped = build_file_block(capped)
-            if not file_block.strip():
-                QMessageBox.critical(
-                    self, "Error", "No readable content found in the selected files."
-                )
-                self._set_chat_input_enabled(True)
-                return
-
-            loaded = len(capped) - len(skipped)
-            system_prompt = CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)
-            self._chat_messages = [{"role": "system", "content": system_prompt}]
-            self._chat_files_loaded = True
-
-            info = f"Context ready: {loaded} file(s) loaded"
-            if skipped:
-                info += f", {len(skipped)} skipped ({', '.join(skipped)})"
-            self._append_system(info)
-            self._chat_info_label.setText(info)
-
-        self._append_chat("You", user_text, color="#4A90D9")
-        self._chat_messages.append({"role": "user", "content": user_text})
-
-        self._chat_worker = ChatWorker(self._chat_messages, model)
-        self._chat_worker.reply_ready.connect(self._on_chat_reply)
+        self._chat_worker.reply_ready.connect(
+            lambda reply, msgs, g=generation: self._on_chat_reply(reply, msgs, g)
+        )
         self._chat_worker.error.connect(self._on_chat_error)
         self._chat_worker.start()
 
-    def _on_chat_reply(self, reply: str, updated_messages: list):
+    def _on_context_info(self, info: str):
+        self._append_system(info)
+        self._chat_info_label.setText(info)
+        self._chat_files_loaded = True
+
+    def _on_chat_reply(self, reply: str, updated_messages: list, generation: int):
+        if generation != self._chat_generation:
+            self._set_chat_input_enabled(True)
+            return
         self._chat_messages = updated_messages
         model = self._model_combo.currentText()
         self._append_chat(model, reply, color="#27AE60")
@@ -522,6 +652,7 @@ class MainWindow(QMainWindow):
         self._chat_history.clear()
         self._chat_messages = []
         self._chat_files_loaded = False
+        self._chat_generation += 1
         self._chat_info_label.setText("History cleared — select files and start chatting.")
 
 
