@@ -153,9 +153,11 @@ class StreamingChatWorker(QThread):
         """Build the vector index; return None to signal fallback to full-context."""
         try:
             index = build_index(self.files_to_load, self.embed_model)
-        except ImportError:
-            # numpy missing (raised via rag._require_numpy) — fall back to
-            # full-context stuffing instead of failing the whole turn.
+        except (ImportError, ValueError):
+            # numpy missing (rag._require_numpy) or the embed model returned no
+            # usable vectors — fall back to full-context stuffing rather than
+            # failing the whole turn. (ConnectionError/TimeoutError propagate to
+            # run()'s handler and surface as a normal error.)
             return None
         if len(index) == 0:
             return None

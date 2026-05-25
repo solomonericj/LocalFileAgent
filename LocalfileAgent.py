@@ -485,10 +485,11 @@ def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_
                 index = None
             else:
                 print(f"done  ({len(index)} chunks)")
-        except ImportError as exc:
+        except (ImportError, ValueError) as exc:
+            # numpy missing, or the embed model returned no usable vectors.
             print(f"\n⚠  {exc}\n   Falling back to full-context mode.")
             index = None
-        except ConnectionError as exc:
+        except (ConnectionError, TimeoutError) as exc:
             print(f"\n✗  {exc}", file=sys.stderr)
             sys.exit(1)
 
@@ -532,23 +533,30 @@ def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_
             print("🗑  Conversation history cleared.")
             continue
 
+        # Persisted history keeps the plain user text; only the outgoing copy
+        # gets the retrieved context injected into the latest turn.
+        messages.append({"role": "user", "content": user_input})
+
         if index is not None:
             from rag import retrieve, build_rag_prompt
             try:
                 chunks = retrieve(index, user_input, embed_model, top_k)
-            except ConnectionError as exc:
+            except (ConnectionError, TimeoutError) as exc:
                 print(f"\n✗  {exc}", file=sys.stderr)
                 sys.exit(1)
-            messages.append({"role": "user", "content": build_rag_prompt(chunks, user_input)})
+            api_messages = messages[:-1] + [
+                {"role": "user", "content": build_rag_prompt(chunks, user_input)}
+            ]
         else:
-            messages.append({"role": "user", "content": user_input})
+            api_messages = messages
 
         print(f"\n{model}: ", end="", flush=True)
         try:
-            reply, messages = query_ollama_chat(messages, model)
-        except ConnectionError as exc:
+            reply, _ = query_ollama_chat(api_messages, model)
+        except (ConnectionError, TimeoutError) as exc:
             print(f"\n✗  {exc}", file=sys.stderr)
             sys.exit(1)
+        messages.append({"role": "assistant", "content": reply})
         print(reply)
 
 
