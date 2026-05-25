@@ -86,40 +86,70 @@ class SummarizeWorker(QThread):
         self.finished.emit()
 
 
-class ChatWorker(QThread):
-    reply_ready = Signal(str, list)
-    context_info = Signal(str)   # emitted after file loading on first message
-    error = Signal(str)
+class StreamingChatWorker(QThread):
+    token_ready  = Signal(str)
+    finished     = Signal(list)    # updated_messages
+    context_info = Signal(str)     # human-readable summary after file load
+    file_status  = Signal(str, str, int)  # path_str, status constant, token_count
+    error        = Signal(str)
 
     def __init__(self, messages: list, model: str, *,
                  files_to_load: list = None, user_text: str = None):
         super().__init__()
-        self.messages = list(messages)   # snapshot — never share the live list
+        self.messages = list(messages)         # snapshot — never share the live list
         self.model = model
-        self.files_to_load = files_to_load
+        self.files_to_load = files_to_load     # list[Path] or None
         self.user_text = user_text
 
     def run(self):
         try:
             if self.files_to_load is not None:
-                file_block, skipped = build_file_block(self.files_to_load)
+                parts: list[str] = []
+                skipped_names: list[str] = []
+
+                for path in self.files_to_load:
+                    content = read_file_safe(path)
+                    if content is None:
+                        skipped_names.append(path.name)
+                        self.file_status.emit(
+                            str(path), FileItemWidget.STATUS_SKIPPED, 0
+                        )
+                    else:
+                        token_count = len(content) // 4
+                        parts.append(f"### {path.name}\nPath: {path}\n\n{content}")
+                        self.file_status.emit(
+                            str(path), FileItemWidget.STATUS_LOADED, token_count
+                        )
+
+                file_block = "\n\n---\n\n".join(parts)
                 if not file_block.strip():
                     self.error.emit("No readable content found in the selected files.")
                     return
-                loaded = len(self.files_to_load) - len(skipped)
+
+                loaded = len(self.files_to_load) - len(skipped_names)
                 info = f"Context ready: {loaded} file(s) loaded"
-                if skipped:
-                    info += f", {len(skipped)} skipped ({', '.join(skipped)})"
+                if skipped_names:
+                    info += f", {len(skipped_names)} skipped ({', '.join(skipped_names)})"
                 self.context_info.emit(info)
+
                 system_prompt = CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)
                 self.messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": self.user_text},
                 ]
-            reply, updated = query_ollama_chat(self.messages, self.model)
-            self.reply_ready.emit(reply, updated)
+
+            accumulated = ""
+            for token in stream_ollama_chat(self.messages, self.model):
+                accumulated += token
+                self.token_ready.emit(token)
+
+            updated = self.messages + [{"role": "assistant", "content": accumulated}]
+            self.finished.emit(updated)
+
         except (ConnectionError, TimeoutError) as exc:
             self.error.emit(str(exc))
+        except Exception as exc:
+            self.error.emit(f"Unexpected error: {exc}")
 
 
 # ── FileItemWidget ─────────────────────────────────────────────────────────────
