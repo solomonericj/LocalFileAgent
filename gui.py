@@ -8,6 +8,7 @@ Run with:  python gui.py
 import html
 import json
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -49,8 +50,8 @@ class ModelFetchWorker(QThread):
 
 
 class SummarizeWorker(QThread):
-    progress = Signal(int, int, str)   # current, total, filename
-    file_done = Signal(str, str)       # path_str, summary
+    progress = Signal(int, int, str)      # current, total, filename
+    file_done = Signal(str, str, float)   # path_str, summary, elapsed_seconds
     finished = Signal()
     error = Signal(str)
 
@@ -63,6 +64,7 @@ class SummarizeWorker(QThread):
         for i, path in enumerate(self.files, 1):
             self.progress.emit(i, len(self.files), path.name)
             content = read_file_safe(path)
+            elapsed = 0.0
             if content is None:
                 try:
                     size = path.stat().st_size
@@ -72,23 +74,26 @@ class SummarizeWorker(QThread):
                     summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
             else:
                 try:
+                    t0 = time.monotonic()
                     summary = query_ollama_generate(
                         f"File: {path.name}\n\n{content}",
                         SUMMARISE_SYSTEM,
                         self.model,
                     )
+                    elapsed = time.monotonic() - t0
                 except TimeoutError as exc:
                     summary = f"(skipped — timeout: {exc})"
                 except ConnectionError as exc:
                     self.error.emit(str(exc))
                     return
-            self.file_done.emit(str(path), summary)
+            self.file_done.emit(str(path), summary, elapsed)
         self.finished.emit()
 
 
 class StreamingChatWorker(QThread):
     token_ready  = Signal(str)
     finished     = Signal(list)    # updated_messages
+    timing       = Signal(float)   # elapsed seconds for the LLM call
     context_info = Signal(str)     # human-readable summary after file load
     file_status  = Signal(str, str, int)  # path_str, status constant, token_count
     error        = Signal(str)
@@ -139,11 +144,14 @@ class StreamingChatWorker(QThread):
                 ]
 
             accumulated = ""
+            t0 = time.monotonic()
             for token in stream_ollama_chat(self.messages, self.model):
                 accumulated += token
                 self.token_ready.emit(token)
+            elapsed = time.monotonic() - t0
 
             updated = self.messages + [{"role": "assistant", "content": accumulated}]
+            self.timing.emit(elapsed)
             self.finished.emit(updated)
 
         except (ConnectionError, TimeoutError) as exc:
@@ -863,8 +871,10 @@ class MainWindow(QMainWindow):
             self._append_chat("You", user_text, "#3b82f6")
             self._chat_worker = StreamingChatWorker(list(self._chat_messages), model)
 
+        self._last_elapsed = 0.0
         self._start_stream_bubble(model)
         self._chat_worker.token_ready.connect(self._on_token_ready)
+        self._chat_worker.timing.connect(lambda t: setattr(self, "_last_elapsed", t))
         self._chat_worker.finished.connect(
             lambda msgs, g=generation: self._on_chat_reply(msgs, g)
         )
@@ -881,6 +891,7 @@ class MainWindow(QMainWindow):
             self._set_chat_input_enabled(True)
             return
         self._chat_messages = updated_messages
+        self._append_system(f"⏱  {self._last_elapsed:.1f}s")
         self._set_chat_input_enabled(True)
         self._chat_input.setFocus()
         self._auto_save()
@@ -991,10 +1002,11 @@ class MainWindow(QMainWindow):
         self._summarize_worker.error.connect(self._on_summarize_error)
         self._summarize_worker.start()
 
-    def _on_summarize_done(self, path_str: str, summary: str):
+    def _on_summarize_done(self, path_str: str, summary: str, elapsed: float):
         self._summarize_results[path_str] = summary
         name = Path(path_str).name
-        self._append_system(f"── Summary: {name} ──")
+        timing = f"  ⏱  {elapsed:.1f}s" if elapsed > 0 else ""
+        self._append_system(f"── Summary: {name} ──{timing}")
         self._append_chat("Summary", summary, "#7c3aed")
         self._copy_all_btn.setEnabled(bool(self._summarize_results))
         self._save_summaries_btn.setEnabled(bool(self._summarize_results))
