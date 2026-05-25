@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gui.py — PySide6 graphical interface for LocalfileAgent.
+gui.py â€” PySide6 graphical interface for LocalfileAgent.
 
 Run with:  python gui.py
 """
@@ -31,7 +31,7 @@ from LocalfileAgent import (
 )
 from session_manager import SessionManager
 
-# ── Workers ────────────────────────────────────────────────────────────────────
+# â”€â”€ Workers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class ModelFetchWorker(QThread):
     models_ready = Signal(list)
@@ -67,9 +67,9 @@ class SummarizeWorker(QThread):
                 try:
                     size = path.stat().st_size
                 except OSError:
-                    summary = "(skipped — file no longer accessible)"
+                    summary = "(skipped â€” file no longer accessible)"
                 else:
-                    summary = "(empty file)" if size == 0 else f"(skipped — too large: {size:,} bytes)"
+                    summary = "(empty file)" if size == 0 else f"(skipped â€” too large: {size:,} bytes)"
             else:
                 try:
                     summary = query_ollama_generate(
@@ -78,7 +78,7 @@ class SummarizeWorker(QThread):
                         self.model,
                     )
                 except TimeoutError as exc:
-                    summary = f"(skipped — timeout: {exc})"
+                    summary = f"(skipped â€” timeout: {exc})"
                 except ConnectionError as exc:
                     self.error.emit(str(exc))
                     return
@@ -96,7 +96,7 @@ class StreamingChatWorker(QThread):
     def __init__(self, messages: list, model: str, *,
                  files_to_load: list = None, user_text: str = None):
         super().__init__()
-        self.messages = list(messages)         # snapshot — never share the live list
+        self.messages = list(messages)         # snapshot â€” never share the live list
         self.model = model
         self.files_to_load = files_to_load     # list[Path] or None
         self.user_text = user_text
@@ -152,7 +152,7 @@ class StreamingChatWorker(QThread):
             self.error.emit(f"Unexpected error: {exc}")
 
 
-# ── FileItemWidget ─────────────────────────────────────────────────────────────
+# â”€â”€ FileItemWidget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class FileItemWidget(QWidget):
     remove_requested = Signal(str)   # emits path_str
@@ -163,10 +163,10 @@ class FileItemWidget(QWidget):
     STATUS_DELETED = "deleted"
 
     _STATUS_STYLES = {
-        STATUS_PENDING: ("↻", "#64748b"),
-        STATUS_LOADED:  ("✓", "#22c55e"),
-        STATUS_SKIPPED: ("⚠", "#f59e0b"),
-        STATUS_DELETED: ("✕", "#ef4444"),
+        STATUS_PENDING: ("â†»", "#64748b"),
+        STATUS_LOADED:  ("âœ“", "#22c55e"),
+        STATUS_SKIPPED: ("âš ", "#f59e0b"),
+        STATUS_DELETED: ("âœ•", "#ef4444"),
     }
 
     def __init__(self, path_str: str, parent=None):
@@ -191,7 +191,7 @@ class FileItemWidget(QWidget):
         row = QHBoxLayout()
         row.setSpacing(6)
 
-        self._badge = QLabel("↻")
+        self._badge = QLabel("â†»")
         self._badge.setFixedWidth(14)
         row.addWidget(self._badge)
 
@@ -200,7 +200,7 @@ class FileItemWidget(QWidget):
         self._name_label.setStyleSheet("font-size: 11px; color: #1e293b;")
         row.addWidget(self._name_label, 1)
 
-        self._remove_btn = QPushButton("✕")
+        self._remove_btn = QPushButton("âœ•")
         self._remove_btn.setFixedSize(16, 16)
         self._remove_btn.setFlat(True)
         self._remove_btn.setStyleSheet("color: #94a3b8; font-size: 9px; border: none;")
@@ -224,7 +224,7 @@ class FileItemWidget(QWidget):
         )
 
         if self._status == self.STATUS_SKIPPED:
-            self._token_label.setText("skipped — too large")
+            self._token_label.setText("skipped â€” too large")
             self._token_label.setStyleSheet(
                 "font-size: 9px; color: #f59e0b; padding-left: 20px;"
             )
@@ -256,7 +256,7 @@ class FileItemWidget(QWidget):
         return self._path_str
 
 
-# ── ContextSidebar ─────────────────────────────────────────────────────────────
+# â”€â”€ ContextSidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class ContextSidebar(QWidget):
     files_changed = Signal()        # emitted on any add/remove
@@ -270,7 +270,7 @@ class ContextSidebar(QWidget):
         self.setAcceptDrops(True)
         self._build_ui()
 
-    # ── construction ──────────────────────────────────────────────────────────
+    # â”€â”€ construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -295,7 +295,7 @@ class ContextSidebar(QWidget):
         sep.setStyleSheet("color: #e2e8f0;")
         layout.addWidget(sep)
 
-        self._ctx_label = QLabel("CONTEXT — 0 FILES")
+        self._ctx_label = QLabel("CONTEXT â€” 0 FILES")
         self._ctx_label.setStyleSheet(
             "font-size: 9px; color: #64748b; letter-spacing: 1px; font-weight: 600;"
         )
@@ -368,7 +368,7 @@ class ContextSidebar(QWidget):
         self._token_warning.setVisible(False)
         layout.addWidget(self._token_warning)
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # â”€â”€ public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def model(self) -> str:
         return self._model_combo.currentText().strip()
@@ -422,11 +422,11 @@ class ContextSidebar(QWidget):
             if not Path(p).exists():
                 self.set_file_status(p, FileItemWidget.STATUS_DELETED)
 
-    # ── private helpers ───────────────────────────────────────────────────────
+    # â”€â”€ private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _refresh_counts(self):
         n = len(self._items)
-        self._ctx_label.setText(f"CONTEXT — {n} FILE{'S' if n != 1 else ''}")
+        self._ctx_label.setText(f"CONTEXT â€” {n} FILE{'S' if n != 1 else ''}")
 
         total = sum(w.token_estimate() for w in self._items.values())
         k = total // 1000
@@ -437,7 +437,7 @@ class ContextSidebar(QWidget):
         if pct >= 95:
             self._token_bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; }")
             self._token_warning.setText(
-                "Context nearly full — remove files or start a new session"
+                "Context nearly full â€” remove files or start a new session"
             )
             self._token_warning.setVisible(True)
         elif pct >= 75:
@@ -471,7 +471,7 @@ class ContextSidebar(QWidget):
         for f in files:
             self.add_path(str(f))
 
-    # ── drag and drop from OS file manager ───────────────────────────────────
+    # â”€â”€ drag and drop from OS file manager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -492,441 +492,188 @@ class ContextSidebar(QWidget):
         event.acceptProposedAction()
 
 
-# ── Main Window ────────────────────────────────────────────────────────────────
+# â”€â”€ Main Window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LocalFileAgent")
         self.setMinimumSize(900, 650)
-        self.resize(1100, 780)
+        self.resize(1200, 800)
 
+        # Chat state
         self._chat_messages: list = []
         self._chat_files_loaded = False
         self._chat_generation = 0
-        self._summarize_results: list = []
+
+        # Streaming state
+        self._stream_block: int | None = None   # QTextDocument block number
+        self._stream_text = ""
+
+        # Summarize results for current session
+        self._summarize_results: dict = {}   # path_str -> summary_text
+
+        # Session management
+        self._session_manager = SessionManager()
 
         self._build_ui()
         self._fetch_models()
 
-    # ── UI construction ────────────────────────────────────────────────────────
+    # â”€â”€ layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(10, 10, 10, 4)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        root.addWidget(self._build_options_bar())
+        root.addWidget(self._build_top_bar())
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_file_panel())
-        splitter.addWidget(self._build_tabs())
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        root.addWidget(splitter, 1)
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(8, 8, 8, 8)
+        body_layout.setSpacing(8)
+
+        self._sidebar = ContextSidebar()
+        self._sidebar.setFixedWidth(260)
+        self._sidebar.files_changed.connect(self._on_files_changed)
+        self._sidebar.model_changed.connect(self._on_model_changed)
+        body_layout.addWidget(self._sidebar)
+
+        body_layout.addWidget(self._build_chat_panel(), 1)
+        root.addWidget(body, 1)
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
 
-    def _build_options_bar(self) -> QWidget:
+    def _build_top_bar(self) -> QWidget:
         bar = QWidget()
+        bar.setFixedHeight(44)
+        bar.setStyleSheet("background: #ffffff; border-bottom: 1px solid #e2e8f0;")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 0, 16, 0)
 
-        layout.addWidget(QLabel("Model:"))
-        self._model_combo = QComboBox()
-        self._model_combo.setEditable(True)
-        self._model_combo.addItem(DEFAULT_MODEL)
-        self._model_combo.setMinimumWidth(180)
-        self._model_combo.setToolTip("Ollama model — auto-populated from localhost:11434")
-        layout.addWidget(self._model_combo)
-
-        self._recursive_check = QCheckBox("Recursive")
-        self._recursive_check.setToolTip("Recurse into subdirectories when adding a folder")
-        layout.addWidget(self._recursive_check)
-
-        layout.addWidget(QLabel("Extensions:"))
-        self._ext_input = QLineEdit()
-        self._ext_input.setPlaceholderText(".py .md .txt  (blank = all supported)")
-        self._ext_input.setMaximumWidth(220)
-        self._ext_input.setToolTip(
-            "Space-separated extensions to include, e.g.  .py .md\n"
-            "Leave blank to include all supported file types."
-        )
-        layout.addWidget(self._ext_input)
-
+        title = QLabel("â¬¡ LocalFileAgent")
+        title.setStyleSheet("font-weight: 700; font-size: 15px; color: #1e293b;")
+        layout.addWidget(title)
         layout.addStretch()
+
+        self._sessions_btn = QPushButton("\U0001F550 Sessions")
+        self._sessions_btn.clicked.connect(self._open_sessions)
+        layout.addWidget(self._sessions_btn)
+
         return bar
 
-    def _build_file_panel(self) -> QGroupBox:
-        group = QGroupBox("Files")
-        layout = QVBoxLayout(group)
+    def _build_chat_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
-        self._file_list = QListWidget()
-        self._file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self._file_list.setToolTip("Files to process — hover an item to see its full path")
-        layout.addWidget(self._file_list)
-
-        btn_row = QHBoxLayout()
-        for label, slot in [
-            ("Add Files…", self._add_files),
-            ("Add Folder…", self._add_folder),
-            ("Remove", self._remove_selected),
-            ("Clear All", self._clear_files),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(slot)
-            btn_row.addWidget(btn)
-        layout.addLayout(btn_row)
-
-        self._file_count_label = QLabel("No files selected")
-        layout.addWidget(self._file_count_label)
-        return group
-
-    def _build_tabs(self) -> QTabWidget:
-        tabs = QTabWidget()
-        tabs.addTab(self._build_summarize_tab(), "Summarize")
-        tabs.addTab(self._build_chat_tab(), "Chat")
-        return tabs
-
-    def _build_summarize_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        ctrl = QHBoxLayout()
-        self._run_btn = QPushButton("▶  Run Summarize")
-        self._run_btn.setMinimumHeight(34)
-        self._run_btn.clicked.connect(self._run_summarize)
-        ctrl.addWidget(self._run_btn)
-
-        self._save_btn = QPushButton("Save Output…")
-        self._save_btn.setEnabled(False)
-        self._save_btn.clicked.connect(self._save_output)
-        ctrl.addWidget(self._save_btn)
-        ctrl.addStretch()
-        layout.addLayout(ctrl)
-
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setVisible(False)
-        layout.addWidget(self._progress_bar)
-
-        self._progress_label = QLabel("")
-        layout.addWidget(self._progress_label)
-
-        self._output_text = QTextEdit()
-        self._output_text.setReadOnly(True)
-        self._output_text.setFont(QFont("Monospace", 10))
-        self._output_text.setPlaceholderText("Summaries will appear here…")
-        layout.addWidget(self._output_text, 1)
-
-        return w
-
-    def _build_chat_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        info_row = QHBoxLayout()
-        self._chat_info_label = QLabel("Select files and start chatting.")
-        info_row.addWidget(self._chat_info_label)
-        info_row.addStretch()
-
-        clear_btn = QPushButton("Clear History")
-        clear_btn.clicked.connect(self._clear_chat_history)
-        info_row.addWidget(clear_btn)
-        layout.addLayout(info_row)
-
+        # Chat history
         self._chat_history = QTextEdit()
         self._chat_history.setReadOnly(True)
         self._chat_history.setFont(QFont("Monospace", 10))
-        self._chat_history.setPlaceholderText("Conversation will appear here…")
+        self._chat_history.setPlaceholderText("Add files on the left, then start chattingâ€¦")
         layout.addWidget(self._chat_history, 1)
 
+        # Summarize strip (hidden until files are loaded)
+        self._summarize_strip = QWidget()
+        strip_layout = QHBoxLayout(self._summarize_strip)
+        strip_layout.setContentsMargins(4, 4, 4, 4)
+        strip_layout.setSpacing(6)
+        strip_layout.addWidget(QLabel("Summarize:"))
+        self._summarize_btns_layout = QHBoxLayout()
+        strip_layout.addLayout(self._summarize_btns_layout)
+        strip_layout.addStretch()
+        self._copy_all_btn = QPushButton("\U0001F4CB Copy All")
+        self._copy_all_btn.setStyleSheet("font-size: 10px;")
+        self._copy_all_btn.clicked.connect(self._copy_all_summaries)
+        self._copy_all_btn.setEnabled(False)
+        strip_layout.addWidget(self._copy_all_btn)
+        self._summarize_strip.setVisible(False)
+        layout.addWidget(self._summarize_strip)
+
+        # Input row
         input_row = QHBoxLayout()
         self._chat_input = QLineEdit()
-        self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
+        self._chat_input.setPlaceholderText("Ask a question about the loaded filesâ€¦")
         self._chat_input.returnPressed.connect(self._send_chat)
         input_row.addWidget(self._chat_input, 1)
-
         self._send_btn = QPushButton("Send")
         self._send_btn.setMinimumWidth(80)
         self._send_btn.clicked.connect(self._send_chat)
         input_row.addWidget(self._send_btn)
         layout.addLayout(input_row)
 
-        return w
+        return panel
 
-    # ── File management ────────────────────────────────────────────────────────
-
-    def _get_extensions(self) -> set:
-        raw = self._ext_input.text().strip()
-        if not raw:
-            return SUPPORTED_EXTENSIONS
-        return {e if e.startswith(".") else f".{e}" for e in raw.split()}
-
-    def _add_files(self):
-        ext_list = (
-            "Supported Files ("
-            + " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTENSIONS))
-            + ");;All Files (*)"
-        )
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select Files", "", ext_list)
-        for p in paths:
-            self._add_path(p)
-        self._update_count()
-
-    def _add_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
-        if not folder:
-            return
-        files = collect_files([folder], self._get_extensions(), self._recursive_check.isChecked())
-        for f in files:
-            self._add_path(str(f))
-        self._update_count()
-        self._status_bar.showMessage(f"Added {len(files)} file(s) from folder.")
-
-    def _add_path(self, path_str: str):
-        for i in range(self._file_list.count()):
-            if self._file_list.item(i).data(Qt.ItemDataRole.UserRole) == path_str:
-                return
-        item = QListWidgetItem(Path(path_str).name)
-        item.setData(Qt.ItemDataRole.UserRole, path_str)
-        item.setToolTip(path_str)
-        self._file_list.addItem(item)
-
-    def _remove_selected(self):
-        for item in self._file_list.selectedItems():
-            self._file_list.takeItem(self._file_list.row(item))
-        self._update_count()
-
-    def _clear_files(self):
-        self._file_list.clear()
-        self._update_count()
-
-    def _update_count(self):
-        n = self._file_list.count()
-        self._file_count_label.setText(f"{n} file(s) selected" if n else "No files selected")
-        self._chat_files_loaded = False
-
-    def _selected_paths(self) -> list:
-        return [
-            Path(self._file_list.item(i).data(Qt.ItemDataRole.UserRole))
-            for i in range(self._file_list.count())
-        ]
-
-    # ── Model fetch ────────────────────────────────────────────────────────────
+    # â”€â”€ model fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _fetch_models(self):
-        self._status_bar.showMessage("Connecting to Ollama…")
+        self._status_bar.showMessage("Connecting to Ollamaâ€¦")
         self._model_worker = ModelFetchWorker()
         self._model_worker.models_ready.connect(self._on_models_ready)
         self._model_worker.error.connect(self._on_model_error)
         self._model_worker.start()
 
     def _on_models_ready(self, models: list):
-        current = self._model_combo.currentText()
-        self._model_combo.clear()
-        self._model_combo.addItems(models if models else [DEFAULT_MODEL])
-        idx = self._model_combo.findText(current)
-        if idx >= 0:
-            self._model_combo.setCurrentIndex(idx)
+        self._sidebar.set_model_list(models)
         self._status_bar.showMessage(
-            f"Ollama connected — {len(models)} model(s) available"
+            f"Ollama connected â€” {len(models)} model(s) available"
         )
 
     def _on_model_error(self, _msg: str):
         self._status_bar.showMessage(
-            "⚠  Ollama not reachable — start it with:  ollama serve"
+            "âš   Ollama not reachable â€” start it with:  ollama serve"
         )
 
-    # ── Summarize ──────────────────────────────────────────────────────────────
+    # â”€â”€ sidebar signals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    def _run_summarize(self):
-        files = self._selected_paths()
-        if not files:
-            QMessageBox.warning(self, "No Files", "Please add files or a folder first.")
-            return
-        model = self._model_combo.currentText().strip()
-        if not model:
-            QMessageBox.warning(self, "No Model", "Please select or enter a model name.")
-            return
+    def _on_files_changed(self):
+        self._chat_files_loaded = False
+        self._rebuild_summarize_strip()
 
-        self._run_btn.setEnabled(False)
-        self._save_btn.setEnabled(False)
-        self._output_text.clear()
-        self._summarize_results.clear()
-        self._progress_bar.setVisible(True)
-        self._progress_bar.setRange(0, len(files))
-        self._progress_bar.setValue(0)
-        self._progress_label.setText("")
+    def _on_model_changed(self, _new_model: str):
+        if self._chat_files_loaded:
+            self._chat_files_loaded = False
+            self._append_system("Model changed â€” context will reload on next message.")
 
-        self._summarize_worker = SummarizeWorker(files, model)
-        self._summarize_worker.progress.connect(self._on_summarize_progress)
-        self._summarize_worker.file_done.connect(self._on_file_done)
-        self._summarize_worker.finished.connect(self._on_summarize_finished)
-        self._summarize_worker.error.connect(self._on_summarize_error)
-        self._summarize_worker.start()
-
-    def _on_summarize_progress(self, current: int, total: int, filename: str):
-        self._progress_bar.setValue(current - 1)
-        self._progress_label.setText(f"[{current}/{total}] Processing {filename}…")
-
-    def _on_file_done(self, path_str: str, summary: str):
-        self._summarize_results.append((path_str, summary))
-        name = Path(path_str).name
-        sep = "─" * 60
-        self._output_text.append(sep)
-        self._output_text.append(f"FILE: {name}")
-        self._output_text.append(f"PATH: {path_str}")
-        self._output_text.append(sep)
-        self._output_text.append(summary)
-        self._output_text.append("")
-
-    def _on_summarize_finished(self):
-        n = len(self._summarize_results)
-        self._progress_bar.setVisible(False)
-        self._progress_label.setText(f"Done — {n} file(s) summarized.")
-        self._run_btn.setEnabled(True)
-        self._save_btn.setEnabled(bool(self._summarize_results))
-        self._status_bar.showMessage(f"Summarization complete: {n} file(s).")
-
-    def _on_summarize_error(self, msg: str):
-        self._run_btn.setEnabled(True)
-        self._progress_bar.setVisible(False)
-        self._progress_label.setText("")
-        QMessageBox.critical(self, "Ollama Error", msg)
-
-    def _save_output(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Output", "summaries.md",
-            "Markdown (*.md);;Plain Text (*.txt);;All Files (*)",
-        )
-        if not path:
-            return
-        output_path = Path(path)
-        if output_path.suffix.lower() == ".md":
-            lines = ["# File Summaries\n"]
-            for p_str, summary in self._summarize_results:
-                p = Path(p_str)
-                lines += [f"## `{p.name}`", f"**Path:** `{p_str}`\n", summary, ""]
-            text = "\n".join(lines)
-        else:
-            sep = "─" * 60
-            parts = []
-            for p_str, summary in self._summarize_results:
-                parts += [sep, f"FILE : {p_str}", sep, summary, ""]
-            text = "\n".join(parts)
-        try:
-            output_path.write_text(text, encoding="utf-8")
-        except OSError as exc:
-            QMessageBox.critical(self, "Save Error", f"Could not write file:\n{exc}")
-            return
-        self._status_bar.showMessage(f"Saved to {output_path}")
-
-    # ── Chat ───────────────────────────────────────────────────────────────────
-
-    def _send_chat(self):
-        user_text = self._chat_input.text().strip()
-        if not user_text:
-            return
-
-        model = self._model_combo.currentText().strip()
-        if not model:
-            QMessageBox.warning(self, "No Model", "Please select or enter a model name.")
-            return
-
-        self._chat_input.clear()
-        self._set_chat_input_enabled(False)
-
-        if not self._chat_files_loaded:
-            files = self._selected_paths()
-            if not files:
-                QMessageBox.warning(self, "No Files", "Please add files or a folder first.")
-                self._set_chat_input_enabled(True)
-                return
-
-            capped = files[:CONTEXT_FILE_CAP]
-            if len(files) > CONTEXT_FILE_CAP:
-                self._append_system(
-                    f"⚠  Only first {CONTEXT_FILE_CAP} of {len(files)} files loaded (token limit)."
-                )
-            self._append_system(f"Loading {len(capped)} file(s) into context…")
-            self._append_chat("You", user_text, color="#4A90D9")
-            generation = self._chat_generation
-            self._chat_worker = ChatWorker(
-                [], model, files_to_load=capped, user_text=user_text
-            )
-            self._chat_worker.context_info.connect(self._on_context_info)
-        else:
-            self._chat_messages.append({"role": "user", "content": user_text})
-            self._append_chat("You", user_text, color="#4A90D9")
-            generation = self._chat_generation
-            self._chat_worker = ChatWorker(list(self._chat_messages), model)
-
-        self._chat_worker.reply_ready.connect(
-            lambda reply, msgs, g=generation: self._on_chat_reply(reply, msgs, g)
-        )
-        self._chat_worker.error.connect(self._on_chat_error)
-        self._chat_worker.start()
-
-    def _on_context_info(self, info: str):
-        self._append_system(info)
-        self._chat_info_label.setText(info)
-        self._chat_files_loaded = True
-
-    def _on_chat_reply(self, reply: str, updated_messages: list, generation: int):
-        if generation != self._chat_generation:
-            self._set_chat_input_enabled(True)
-            return
-        self._chat_messages = updated_messages
-        model = self._model_combo.currentText()
-        self._append_chat(model, reply, color="#27AE60")
-        self._set_chat_input_enabled(True)
-        self._chat_input.setFocus()
-
-    def _on_chat_error(self, msg: str):
-        self._set_chat_input_enabled(True)
-        QMessageBox.critical(self, "Ollama Error", msg)
-
-    def _set_chat_input_enabled(self, enabled: bool):
-        self._send_btn.setEnabled(enabled)
-        self._chat_input.setEnabled(enabled)
+    # â”€â”€ chat helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _append_system(self, text: str):
         escaped = html.escape(text)
         self._chat_history.append(
             f'<p><i><span style="color:#888888">{escaped}</span></i></p>'
         )
-        self._scroll_chat()
-
-    def _append_chat(self, label: str, text: str, color: str = "#000000"):
-        escaped_label = html.escape(label)
-        escaped_text = html.escape(text).replace("\n", "<br>")
-        self._chat_history.append(
-            f'<p><b><span style="color:{color}">{escaped_label}:</span></b> {escaped_text}</p>'
-        )
-        self._scroll_chat()
-
-    def _scroll_chat(self):
         sb = self._chat_history.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _clear_chat_history(self):
-        self._chat_history.clear()
-        self._chat_messages = []
-        self._chat_files_loaded = False
-        self._chat_generation += 1
-        self._chat_info_label.setText("History cleared — select files and start chatting.")
+    # â”€â”€ placeholder stubs (implemented in Tasks 7â€“9) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _send_chat(self):
+        pass
+
+    def _open_sessions(self):
+        pass
+
+    def _rebuild_summarize_strip(self):
+        pass
+
+    def _copy_all_summaries(self):
+        pass
+
+    def _set_chat_input_enabled(self, enabled: bool):
+        self._send_btn.setEnabled(enabled)
+        self._chat_input.setEnabled(enabled)
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+# â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("LocalFileAgent")
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
