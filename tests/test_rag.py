@@ -65,3 +65,42 @@ def test_search_k_larger_than_corpus():
 
 def test_empty_index_search_returns_empty():
     assert VectorIndex().search([1.0, 0.0], k=3) == []
+
+
+from rag import _cache_key, save_cache, load_cached
+
+
+def test_cache_round_trip(tmp_path, monkeypatch):
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("hello")
+    chunks = [Chunk(source="doc.txt", path=str(f), text="hello", index=0)]
+    save_cache(f, "nomic-embed-text", chunks, [[0.5, 0.5]])
+
+    loaded = load_cached(f, "nomic-embed-text")
+    assert loaded is not None
+    cached_chunks, cached_vecs = loaded
+    assert cached_chunks[0].text == "hello"
+    assert cached_chunks[0].source == "doc.txt"
+    assert cached_vecs[0] == [0.5, 0.5]
+
+
+def test_cache_miss_when_file_changes(tmp_path, monkeypatch):
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("hello")
+    save_cache(f, "nomic-embed-text", [Chunk("doc.txt", str(f), "hello", 0)], [[0.1]])
+    # Rewrite with different size -> key changes -> miss
+    f.write_text("hello world, now longer")
+    assert load_cached(f, "nomic-embed-text") is None
+
+
+def test_cache_miss_on_different_model(tmp_path, monkeypatch):
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("hello")
+    save_cache(f, "nomic-embed-text", [Chunk("doc.txt", str(f), "hello", 0)], [[0.1]])
+    assert load_cached(f, "other-model") is None

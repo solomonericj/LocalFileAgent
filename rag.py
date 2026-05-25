@@ -91,3 +91,45 @@ class VectorIndex:
         k = min(k, len(self.chunks))
         top = np.argsort(-sims)[:k]
         return [(self.chunks[i], float(sims[i])) for i in top]
+
+
+def _cache_key(path: Path, embed_model: str) -> str:
+    """Stable key from resolved path + size + mtime + embed model."""
+    try:
+        st = path.stat()
+        sig = f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}|{embed_model}"
+    except OSError:
+        sig = f"{path}|missing|{embed_model}"
+    return hashlib.sha1(sig.encode()).hexdigest()
+
+
+def _cache_path(key: str) -> Path:
+    return CACHE_DIR / f"{key}.npz"
+
+
+def save_cache(path: Path, embed_model: str, chunks: list[Chunk],
+               vectors: list[list[float]]) -> None:
+    np = _require_numpy()
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    meta = [{"source": c.source, "path": c.path, "text": c.text, "index": c.index}
+            for c in chunks]
+    np.savez(
+        _cache_path(_cache_key(path, embed_model)),
+        vectors=np.asarray(vectors, dtype=np.float32),
+        meta=np.array(json.dumps(meta), dtype=object),
+    )
+
+
+def load_cached(path: Path, embed_model: str) -> Optional[tuple[list[Chunk], list[list[float]]]]:
+    np = _require_numpy()
+    cache_file = _cache_path(_cache_key(path, embed_model))
+    if not cache_file.exists():
+        return None
+    try:
+        data = np.load(cache_file, allow_pickle=True)
+        meta = json.loads(str(data["meta"]))
+        chunks = [Chunk(m["source"], m["path"], m["text"], m["index"]) for m in meta]
+        vectors = data["vectors"].tolist()
+        return chunks, vectors
+    except (OSError, ValueError, KeyError):
+        return None
