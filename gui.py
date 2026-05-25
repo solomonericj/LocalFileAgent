@@ -653,6 +653,18 @@ class MainWindow(QMainWindow):
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+
+        # Animated "busy" indicator — an indeterminate (range 0,0) progress bar
+        # pinned to the right of the status bar, shown only while a worker runs
+        # so the app never looks frozen during model thinking/indexing.
+        self._busy_bar = QProgressBar()
+        self._busy_bar.setRange(0, 0)
+        self._busy_bar.setMaximumWidth(120)
+        self._busy_bar.setFixedHeight(14)
+        self._busy_bar.setTextVisible(False)
+        self._busy_bar.hide()
+        self._status_bar.addPermanentWidget(self._busy_bar)
+
         self._status_bar.showMessage("Ready")
 
     def _build_top_bar(self) -> QWidget:
@@ -725,7 +737,7 @@ class MainWindow(QMainWindow):
     # ── model fetch ───────────────────────────────────────────────────────────────
 
     def _fetch_models(self):
-        self._status_bar.showMessage("Connecting to Ollama…")
+        self._set_busy("Connecting to Ollama…")
         self._model_worker = ModelFetchWorker()
         self._model_worker.models_ready.connect(self._on_models_ready)
         self._model_worker.error.connect(self._on_model_error)
@@ -733,14 +745,10 @@ class MainWindow(QMainWindow):
 
     def _on_models_ready(self, models: list):
         self._sidebar.set_model_list(models)
-        self._status_bar.showMessage(
-            f"Ollama connected — {len(models)} model(s) available"
-        )
+        self._clear_busy(f"Ollama connected — {len(models)} model(s) available")
 
     def _on_model_error(self, _msg: str):
-        self._status_bar.showMessage(
-            "⚠  Ollama not reachable — start it with:  ollama serve"
-        )
+        self._clear_busy("⚠  Ollama not reachable — start it with:  ollama serve")
 
     # ── sidebar signals ───────────────────────────────────────────────────────────
 
@@ -786,6 +794,9 @@ class MainWindow(QMainWindow):
 
     def _on_token_ready(self, token: str):
         """Insert token before the ▌ cursor in the streaming bubble."""
+        if self._stream_text == "":
+            # First token has arrived — the model is no longer just thinking.
+            self._status_bar.showMessage("Responding…")
         doc = self._chat_history.document()
         block = doc.findBlockByNumber(self._stream_block)
         cursor = QTextCursor(block)
@@ -818,6 +829,16 @@ class MainWindow(QMainWindow):
     def _set_chat_input_enabled(self, enabled: bool):
         self._send_btn.setEnabled(enabled)
         self._chat_input.setEnabled(enabled)
+
+    def _set_busy(self, message: str):
+        """Show the animated busy indicator with a status message."""
+        self._status_bar.showMessage(message)
+        self._busy_bar.show()
+
+    def _clear_busy(self, message: str = "Ready"):
+        """Hide the busy indicator and reset the status message."""
+        self._busy_bar.hide()
+        self._status_bar.showMessage(message)
 
     # -- chat send and reply handlers --
 
@@ -869,6 +890,7 @@ class MainWindow(QMainWindow):
             lambda msgs, g=generation: self._on_chat_reply(msgs, g)
         )
         self._chat_worker.error.connect(self._on_chat_error)
+        self._set_busy("Thinking…")
         self._chat_worker.start()
 
     def _on_context_info(self, info: str):
@@ -877,6 +899,7 @@ class MainWindow(QMainWindow):
 
     def _on_chat_reply(self, updated_messages: list, generation: int):
         self._finish_stream()
+        self._clear_busy()
         if generation != self._chat_generation:
             self._set_chat_input_enabled(True)
             return
@@ -887,6 +910,7 @@ class MainWindow(QMainWindow):
 
     def _on_chat_error(self, msg: str):
         self._finish_stream()
+        self._clear_busy()
         if self._stream_text:
             self._append_system("(response interrupted)")
         self._set_chat_input_enabled(True)
@@ -982,14 +1006,17 @@ class MainWindow(QMainWindow):
         model = self._sidebar.model()
         self._set_chat_input_enabled(False)
         self._append_system(f"Summarizing {Path(path_str).name}…")
+        self._set_busy(f"Summarizing {Path(path_str).name}…")
 
         self._summarize_worker = SummarizeWorker([Path(path_str)], model)
         self._summarize_worker.file_done.connect(self._on_summarize_done)
-        self._summarize_worker.finished.connect(
-            lambda: self._set_chat_input_enabled(True)
-        )
+        self._summarize_worker.finished.connect(self._on_summarize_finished)
         self._summarize_worker.error.connect(self._on_summarize_error)
         self._summarize_worker.start()
+
+    def _on_summarize_finished(self):
+        self._set_chat_input_enabled(True)
+        self._clear_busy()
 
     def _on_summarize_done(self, path_str: str, summary: str):
         self._summarize_results[path_str] = summary
@@ -1002,6 +1029,7 @@ class MainWindow(QMainWindow):
 
     def _on_summarize_error(self, msg: str):
         self._set_chat_input_enabled(True)
+        self._clear_busy()
         QMessageBox.critical(self, "Summarize Error", msg)
 
     def _copy_all_summaries(self):
