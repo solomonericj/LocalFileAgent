@@ -226,6 +226,242 @@ class FileItemWidget(QWidget):
         return self._path_str
 
 
+# ── ContextSidebar ─────────────────────────────────────────────────────────────
+
+class ContextSidebar(QWidget):
+    files_changed = Signal()        # emitted on any add/remove
+    model_changed = Signal(str)     # emitted when model combo changes
+
+    MAX_CONTEXT_TOKENS = 32_000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items: dict[str, FileItemWidget] = {}   # path_str -> widget
+        self.setAcceptDrops(True)
+        self._build_ui()
+
+    # ── construction ──────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 10, 8, 10)
+        layout.setSpacing(8)
+
+        # Model selector
+        model_lbl = QLabel("MODEL")
+        model_lbl.setStyleSheet(
+            "font-size: 9px; color: #64748b; letter-spacing: 1px; font-weight: 600;"
+        )
+        layout.addWidget(model_lbl)
+
+        self._model_combo = QComboBox()
+        self._model_combo.setEditable(True)
+        self._model_combo.addItem(DEFAULT_MODEL)
+        self._model_combo.currentTextChanged.connect(self.model_changed.emit)
+        layout.addWidget(self._model_combo)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #e2e8f0;")
+        layout.addWidget(sep)
+
+        self._ctx_label = QLabel("CONTEXT — 0 FILES")
+        self._ctx_label.setStyleSheet(
+            "font-size: 9px; color: #64748b; letter-spacing: 1px; font-weight: 600;"
+        )
+        layout.addWidget(self._ctx_label)
+
+        # Scrollable file list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._file_container = QWidget()
+        self._file_layout = QVBoxLayout(self._file_container)
+        self._file_layout.setContentsMargins(0, 0, 0, 0)
+        self._file_layout.setSpacing(4)
+        self._file_layout.addStretch()
+        scroll.setWidget(self._file_container)
+        layout.addWidget(scroll, 1)
+
+        # Drop zone
+        self._drop_label = QLabel("Drop files here")
+        self._drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._drop_label.setStyleSheet(
+            "border: 2px dashed #cbd5e1; border-radius: 4px;"
+            "padding: 8px; color: #94a3b8; font-size: 10px;"
+        )
+        layout.addWidget(self._drop_label)
+
+        # + Files / + Folder buttons
+        btn_row = QHBoxLayout()
+        add_files_btn = QPushButton("+ Files")
+        add_files_btn.clicked.connect(self._add_files_dialog)
+        btn_row.addWidget(add_files_btn)
+        add_folder_btn = QPushButton("+ Folder")
+        add_folder_btn.clicked.connect(self._add_folder_dialog)
+        btn_row.addWidget(add_folder_btn)
+        layout.addLayout(btn_row)
+
+        # Recursive + extension filter
+        opt_row = QHBoxLayout()
+        self._recursive_check = QCheckBox("Recursive")
+        opt_row.addWidget(self._recursive_check)
+        self._ext_input = QLineEdit()
+        self._ext_input.setPlaceholderText(".py .md  (blank=all)")
+        self._ext_input.setStyleSheet("font-size: 10px;")
+        opt_row.addWidget(self._ext_input)
+        layout.addLayout(opt_row)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet("color: #e2e8f0;")
+        layout.addWidget(sep2)
+
+        # Token bar
+        token_row = QHBoxLayout()
+        self._token_label = QLabel("0 / 32k tokens")
+        self._token_label.setStyleSheet("font-size: 9px; color: #64748b;")
+        token_row.addWidget(self._token_label)
+        token_row.addStretch()
+        layout.addLayout(token_row)
+
+        self._token_bar = QProgressBar()
+        self._token_bar.setRange(0, 100)
+        self._token_bar.setValue(0)
+        self._token_bar.setTextVisible(False)
+        self._token_bar.setFixedHeight(5)
+        layout.addWidget(self._token_bar)
+
+        self._token_warning = QLabel("")
+        self._token_warning.setStyleSheet("font-size: 9px; color: #f59e0b;")
+        self._token_warning.setWordWrap(True)
+        self._token_warning.setVisible(False)
+        layout.addWidget(self._token_warning)
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def model(self) -> str:
+        return self._model_combo.currentText().strip()
+
+    def set_model_list(self, models: list[str]):
+        current = self.model()
+        self._model_combo.clear()
+        self._model_combo.addItems(models if models else [DEFAULT_MODEL])
+        idx = self._model_combo.findText(current)
+        if idx >= 0:
+            self._model_combo.setCurrentIndex(idx)
+
+    def add_path(self, path_str: str) -> bool:
+        """Add a file. Returns False if already present."""
+        if path_str in self._items:
+            return False
+        item = FileItemWidget(path_str)
+        item.remove_requested.connect(self.remove_path)
+        self._file_layout.insertWidget(self._file_layout.count() - 1, item)
+        self._items[path_str] = item
+        self._refresh_counts()
+        self.files_changed.emit()
+        return True
+
+    def remove_path(self, path_str: str):
+        if path_str not in self._items:
+            return
+        item = self._items.pop(path_str)
+        self._file_layout.removeWidget(item)
+        item.deleteLater()
+        self._refresh_counts()
+        self.files_changed.emit()
+
+    def clear_files(self):
+        for p in list(self._items):
+            self.remove_path(p)
+
+    def get_paths(self) -> list[str]:
+        return list(self._items.keys())
+
+    def set_file_status(self, path_str: str, status: str, token_count: int = None):
+        if path_str in self._items:
+            self._items[path_str].set_status(status, token_count)
+            self._refresh_counts()
+
+    def populate_from_paths(self, paths: list[str]):
+        """Restore file list (e.g., from a loaded session)."""
+        self.clear_files()
+        for p in paths:
+            self.add_path(p)
+            if not Path(p).exists():
+                self.set_file_status(p, FileItemWidget.STATUS_DELETED)
+
+    # ── private helpers ───────────────────────────────────────────────────────
+
+    def _refresh_counts(self):
+        n = len(self._items)
+        self._ctx_label.setText(f"CONTEXT — {n} FILE{'S' if n != 1 else ''}")
+
+        total = sum(w.token_estimate() for w in self._items.values())
+        k = total // 1000
+        pct = min(100, total * 100 // self.MAX_CONTEXT_TOKENS)
+        self._token_label.setText(f"~{k}k / {self.MAX_CONTEXT_TOKENS // 1000}k tokens")
+        self._token_bar.setValue(pct)
+
+        if pct >= 95:
+            self._token_bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; }")
+            self._token_warning.setText(
+                "Context nearly full — remove files or start a new session"
+            )
+            self._token_warning.setVisible(True)
+        elif pct >= 75:
+            self._token_bar.setStyleSheet("QProgressBar::chunk { background: #f59e0b; }")
+            self._token_warning.setVisible(False)
+        else:
+            self._token_bar.setStyleSheet("QProgressBar::chunk { background: #22c55e; }")
+            self._token_warning.setVisible(False)
+
+    def _get_extensions(self) -> set:
+        raw = self._ext_input.text().strip()
+        if not raw:
+            return SUPPORTED_EXTENSIONS
+        return {e if e.startswith(".") else f".{e}" for e in raw.split()}
+
+    def _add_files_dialog(self):
+        ext_filter = (
+            "Supported Files ("
+            + " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTENSIONS))
+            + ");;All Files (*)"
+        )
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select Files", "", ext_filter)
+        for p in paths:
+            self.add_path(p)
+
+    def _add_folder_dialog(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if not folder:
+            return
+        files = collect_files([folder], self._get_extensions(), self._recursive_check.isChecked())
+        for f in files:
+            self.add_path(str(f))
+
+    # ── drag and drop from OS file manager ───────────────────────────────────
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        exts = self._get_extensions()
+        for url in event.mimeData().urls():
+            local = url.toLocalFile()
+            if not local:
+                continue
+            p = Path(local)
+            if p.is_file() and p.suffix.lower() in exts:
+                self.add_path(str(p))
+            elif p.is_dir():
+                for f in collect_files([str(p)], exts, self._recursive_check.isChecked()):
+                    self.add_path(str(f))
+        event.acceptProposedAction()
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
