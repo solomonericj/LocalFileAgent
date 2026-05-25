@@ -67,6 +67,7 @@ def test_file_status_signals_emitted(qtbot, tmp_path):
         [], "mistral",
         files_to_load=[f],
         user_text="what does this do?",
+        use_rag=False,
     )
     statuses = []
     finished_msgs = []
@@ -78,3 +79,36 @@ def test_file_status_signals_emitted(qtbot, tmp_path):
             worker.start()
 
     assert any(s == FileItemWidget.STATUS_LOADED for _, s in statuses)
+
+
+def test_rag_turn_injects_context_but_keeps_plain_history(qtbot, monkeypatch):
+    import gui
+    from rag import Chunk
+
+    monkeypatch.setattr(gui, "retrieve", lambda *a, **k: [Chunk("a.txt", "a.txt", "ground truth", 0)])
+
+    captured = {}
+    def fake_stream(messages, model):
+        captured["messages"] = messages
+        yield "ok"
+    monkeypatch.setattr(gui, "stream_ollama_chat", fake_stream)
+
+    history = [
+        {"role": "system", "content": gui.RAG_SYSTEM},
+        {"role": "user", "content": "what is the truth?"},
+    ]
+    worker = gui.StreamingChatWorker(
+        history, "mistral",
+        rag_index=object(), embed_model="nomic-embed-text",
+        top_k=5, user_text="what is the truth?",
+    )
+    finished = []
+    worker.finished.connect(finished.append)
+    with qtbot.waitSignal(worker.finished, timeout=5000):
+        worker.start()
+
+    # Outgoing request carried the retrieved context...
+    assert "ground truth" in captured["messages"][-1]["content"]
+    # ...but persisted history kept the plain user text and appended the reply.
+    assert finished[0][-2]["content"] == "what is the truth?"
+    assert finished[0][-1] == {"role": "assistant", "content": "ok"}
