@@ -29,9 +29,11 @@ from typing import Iterator
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 DEFAULT_MODEL     = "mistral"
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
 OLLAMA_GENERATE   = "http://localhost:11434/api/generate"
 OLLAMA_CHAT       = "http://localhost:11434/api/chat"
 OLLAMA_TAGS       = "http://localhost:11434/api/tags"
+OLLAMA_EMBED      = "http://localhost:11434/api/embed"
 MAX_FILE_BYTES    = 200_000   # skip text files larger than ~200 KB
 MAX_EXTRACT_CHARS = 400_000   # cap extracted text from binary docs
 CONTEXT_FILE_CAP  = 20        # max files loaded into chat context
@@ -64,6 +66,13 @@ When referencing specific information, mention which file it came from.
 
 {file_block}
 """
+
+RAG_SYSTEM = (
+    "You are a helpful assistant. Answer the user's question using only the "
+    "context excerpts provided in their message. Each excerpt is labelled with "
+    "its source file in square brackets. Cite the source file when you reference "
+    "information. If the excerpts do not contain the answer, say so plainly."
+)
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
 
@@ -162,6 +171,12 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
             "Cannot reach Ollama.\n"
             "Make sure Ollama is running: https://ollama.com"
         ) from exc
+
+
+def embed_ollama(texts: list[str], model: str) -> list[list[float]]:
+    """Embed a batch of strings via Ollama's /api/embed. Returns one vector per input."""
+    result = _post(OLLAMA_EMBED, {"model": model, "input": texts})
+    return result.get("embeddings", [])
 
 
 def check_ollama_available(model: str) -> None:
