@@ -105,6 +105,14 @@ Once in chat mode, the following commands are available:
 
 All processing happens locally. Files are read from disk and sent only to the Ollama API running on `localhost:11434`. Nothing is transmitted to external servers.
 
+## Security
+
+LocalFileAgent is a local tool you run on your own machine, against files you choose. Be aware of what that involves:
+
+- **It reads arbitrary local files.** Whatever paths you point it at are read from disk and their contents sent to your local Ollama model. Only scan files you trust and intend to share with the model.
+- **It runs third-party document parsers.** Opening `.pdf`, `.docx`, `.xlsx`, `.xls`, and `.pptx` files invokes the corresponding parsing libraries (`pypdf`, `python-docx`, `openpyxl`, `xlrd`, `python-pptx`). A maliciously crafted document could exploit a bug in one of these parsers, so keep them updated and treat untrusted documents with caution.
+- **`.doc` / `.ppt` launch Microsoft Office via COM.** On Windows, legacy formats are extracted by automating Word/PowerPoint through `pywin32`. This starts real Office processes to open the file — do not point it at untrusted `.doc`/`.ppt` files, since opening them carries the same risks as double-clicking them (e.g. macros).
+
 ## Limits
 
 | Setting | Default |
