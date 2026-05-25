@@ -682,6 +682,11 @@ class MainWindow(QMainWindow):
         self._summarize_btns_layout = QHBoxLayout()
         strip_layout.addLayout(self._summarize_btns_layout)
         strip_layout.addStretch()
+        self._save_summaries_btn = QPushButton("Save…")
+        self._save_summaries_btn.setStyleSheet("font-size: 10px;")
+        self._save_summaries_btn.clicked.connect(self._save_summaries_to_file)
+        self._save_summaries_btn.setEnabled(False)
+        strip_layout.addWidget(self._save_summaries_btn)
         self._copy_all_btn = QPushButton("\U0001F4CB Copy All")
         self._copy_all_btn.setStyleSheet("font-size: 10px;")
         self._copy_all_btn.clicked.connect(self._copy_all_summaries)
@@ -825,7 +830,7 @@ class MainWindow(QMainWindow):
                 if self._sidebar._items[p].status() != FileItemWidget.STATUS_DELETED
             ]
             if not valid_paths:
-                QMessageBox.warning(self, "No Files", "Please add files or a folder first.")
+                QMessageBox.warning(self, "No Files", "No accessible files. Check for deleted files in the sidebar.")
                 self._set_chat_input_enabled(True)
                 return
 
@@ -910,6 +915,7 @@ class MainWindow(QMainWindow):
         self._sidebar.clear_files()
         self._rebuild_summarize_strip()
         self._copy_all_btn.setEnabled(False)
+        self._save_summaries_btn.setEnabled(False)
         self._status_bar.showMessage("New session started.")
 
     def _load_session(self, session: dict):
@@ -939,6 +945,7 @@ class MainWindow(QMainWindow):
             self._chat_files_loaded = True
         self._rebuild_summarize_strip()
         self._copy_all_btn.setEnabled(bool(self._summarize_results))
+        self._save_summaries_btn.setEnabled(bool(self._summarize_results))
         self._status_bar.showMessage(f"Session loaded \u2014 {len(self._sidebar.get_paths())} file(s).")
 
     def _rebuild_summarize_strip(self):
@@ -981,6 +988,7 @@ class MainWindow(QMainWindow):
         self._append_system(f"── Summary: {name} ──")
         self._append_chat("Summary", summary, "#7c3aed")
         self._copy_all_btn.setEnabled(bool(self._summarize_results))
+        self._save_summaries_btn.setEnabled(bool(self._summarize_results))
         self._auto_save()
 
     def _on_summarize_error(self, msg: str):
@@ -996,6 +1004,27 @@ class MainWindow(QMainWindow):
         text = "\n".join(lines)
         QApplication.clipboard().setText(text)
         self._status_bar.showMessage("Summaries copied to clipboard.")
+
+    def _save_summaries_to_file(self):
+        if not self._summarize_results:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Summaries", "summaries.md",
+            "Markdown (*.md);;Plain Text (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        output = Path(path)
+        lines = ["# File Summaries\n"]
+        for path_str, summary in self._summarize_results.items():
+            p = Path(path_str)
+            lines += [f"## `{p.name}`", f"**Path:** `{path_str}`\n", summary, ""]
+        try:
+            output.write_text("\n".join(lines), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Error", f"Could not write file:\n{exc}")
+            return
+        self._status_bar.showMessage(f"Summaries saved to {output}")
 
 
 # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
