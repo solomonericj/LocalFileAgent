@@ -465,41 +465,56 @@ def build_file_block(files: list[Path]) -> tuple[str, list[str]]:
     return "\n\n---\n\n".join(parts), skipped
 
 
-def run_chat(files: list[Path], model: str) -> None:
+def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_MODEL,
+             top_k: int = 5, use_rag: bool = True) -> None:
     if len(files) > CONTEXT_FILE_CAP:
         print(
             f"⚠  {len(files)} files found — only the first {CONTEXT_FILE_CAP} will be "
-            f"loaded into chat context (token limit).\n"
-            f"   Use --ext or --recursive flags to narrow the selection.\n"
+            f"used (limit).\n   Use --ext or --recursive to narrow the selection.\n"
         )
         files = files[:CONTEXT_FILE_CAP]
 
-    print(f"📂  Loading {len(files)} file(s) into context…", end=" ", flush=True)
-    file_block, skipped = build_file_block(files)
+    index = None
+    if use_rag:
+        try:
+            print(f"📂  Indexing {len(files)} file(s) with '{embed_model}'…", end=" ", flush=True)
+            from rag import build_index
+            index = build_index(files, embed_model)
+            if len(index) == 0:
+                print("\n⚠  No content indexed — falling back to full-context mode.")
+                index = None
+            else:
+                print(f"done  ({len(index)} chunks)")
+        except ImportError as exc:
+            print(f"\n⚠  {exc}\n   Falling back to full-context mode.")
+            index = None
+        except ConnectionError as exc:
+            print(f"\n✗  {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    if not file_block.strip():
-        print("\n✗  No readable content found in the selected files.", file=sys.stderr)
-        sys.exit(1)
-
-    loaded = len(files) - len(skipped)
-    print(f"done  ({loaded} loaded, {len(skipped)} skipped)")
-
-    if skipped:
-        print(f"   Skipped (empty/too large): {', '.join(skipped)}")
-
-    system_prompt = CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
-
-    print("\nLoaded files:")
-    for path in files:
-        mark = "✗" if path.name in skipped else "✓"
-        print(f"  {mark} {path.name}")
-
-    print(
-        f"\n💬  Chat mode — ask anything about the loaded files.\n"
-        f"    Commands:  /list  /clear  /quit\n"
-        f"{'─'*60}"
-    )
+    if index is not None:
+        messages: list[dict] = [{"role": "system", "content": RAG_SYSTEM}]
+        print(
+            f"\n💬  Chat mode (RAG) — ask anything about the indexed files.\n"
+            f"    Commands:  /clear  /quit\n{'─'*60}"
+        )
+    else:
+        # Fallback: original full-context behavior.
+        print(f"📂  Loading {len(files)} file(s) into context…", end=" ", flush=True)
+        file_block, skipped = build_file_block(files)
+        if not file_block.strip():
+            print("\n✗  No readable content found in the selected files.", file=sys.stderr)
+            sys.exit(1)
+        loaded = len(files) - len(skipped)
+        print(f"done  ({loaded} loaded, {len(skipped)} skipped)")
+        if skipped:
+            print(f"   Skipped (empty/too large): {', '.join(skipped)}")
+        messages = [{"role": "system",
+                     "content": CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)}]
+        print(
+            f"\n💬  Chat mode — ask anything about the loaded files.\n"
+            f"    Commands:  /clear  /quit\n{'─'*60}"
+        )
 
     while True:
         try:
@@ -507,44 +522,33 @@ def run_chat(files: list[Path], model: str) -> None:
         except (EOFError, KeyboardInterrupt):
             print("\n\nBye!")
             break
-
         if not user_input:
             continue
-
         if user_input.lower() in ("/quit", "/exit", "/q"):
             print("Bye!")
             break
-
-        if user_input.lower() == "/list":
-            print("Loaded files:")
-            for path in files:
-                if path.name not in skipped:
-                    print(f"  • {path}")
-            continue
-
         if user_input.lower() == "/clear":
             messages = [messages[0]]
             print("🗑  Conversation history cleared.")
             continue
 
-        if user_input.lower() == "/help":
-            print(
-                "Commands:\n"
-                "  /list   — show loaded files\n"
-                "  /clear  — reset conversation history\n"
-                "  /quit   — exit\n"
-            )
-            continue
+        if index is not None:
+            from rag import retrieve, build_rag_prompt
+            try:
+                chunks = retrieve(index, user_input, embed_model, top_k)
+            except ConnectionError as exc:
+                print(f"\n✗  {exc}", file=sys.stderr)
+                sys.exit(1)
+            messages.append({"role": "user", "content": build_rag_prompt(chunks, user_input)})
+        else:
+            messages.append({"role": "user", "content": user_input})
 
-        messages.append({"role": "user", "content": user_input})
         print(f"\n{model}: ", end="", flush=True)
-
         try:
             reply, messages = query_ollama_chat(messages, model)
         except ConnectionError as exc:
             print(f"\n✗  {exc}", file=sys.stderr)
             sys.exit(1)
-
         print(reply)
 
 
@@ -566,6 +570,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", "-m",
         default=DEFAULT_MODEL,
         help=f"Ollama model to use (default: {DEFAULT_MODEL}).",
+    )
+    p.add_argument(
+        "--embed-model",
+        default=DEFAULT_EMBED_MODEL,
+        help=f"Embedding model for RAG (default: {DEFAULT_EMBED_MODEL}).",
+    )
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="(chat) Number of context chunks to retrieve per question (default: 5).",
+    )
+    p.add_argument(
+        "--no-rag",
+        action="store_true",
+        help="(chat) Disable RAG; load full file contents into context instead.",
     )
     p.add_argument(
         "--output", "-o",
@@ -599,7 +619,8 @@ def main() -> None:
     )
 
     if not args.no_check:
-        check_ollama_available(args.model)
+        embed_model = None if args.no_rag else args.embed_model
+        check_ollama_available(args.model, embed_model)
 
     files = collect_files(args.paths, extensions, args.recursive)
     if not files:
@@ -607,7 +628,8 @@ def main() -> None:
         sys.exit(0)
 
     if args.chat:
-        run_chat(files, args.model)
+        run_chat(files, args.model, embed_model=args.embed_model,
+                 top_k=args.top_k, use_rag=not args.no_rag)
     else:
         run_summarise(files, args.model, args.output)
 
