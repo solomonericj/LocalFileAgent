@@ -561,7 +561,8 @@ class ContextSidebar(QWidget):
         if pct >= 95:
             self._token_bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; }")
             self._token_warning.setText(
-                "Context nearly full — remove files or start a new session"
+                "Large context — RAG sends only the most relevant chunks each turn "
+                "(full-context mode, --no-rag, may exceed the model's window)"
             )
             self._token_warning.setVisible(True)
         elif pct >= 75:
@@ -585,7 +586,10 @@ class ContextSidebar(QWidget):
         )
         paths, _ = QFileDialog.getOpenFileNames(self, "Select Files", "", ext_filter)
         for p in paths:
-            self.add_path(p)
+            # Skip files the app can't read (e.g. picked via the "All Files"
+            # filter), matching the drag-and-drop path.
+            if Path(p).suffix.lower() in SUPPORTED_EXTENSIONS:
+                self.add_path(p)
 
     def _add_folder_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")
