@@ -32,8 +32,7 @@ Chat mode uses **RAG** (retrieval-augmented generation): your files are chunked 
 - [Ollama](https://ollama.com) running locally (`ollama serve`)
 - A chat model pulled, e.g. `ollama pull mistral`
 - An embeddings model for RAG chat, e.g. `ollama pull nomic-embed-text`
-- Runtime deps: `pip install -r requirements.txt` (numpy, for the RAG index)
-- `PySide6` for the GUI: `pip install PySide6`
+- Runtime deps (numpy + PySide6): installed automatically by `pip install -e .` (see [Install](#install)), or via `pip install -r requirements.txt`
 
 ### Optional dependencies (for binary file formats)
 
@@ -46,42 +45,71 @@ Chat mode uses **RAG** (retrieval-augmented generation): your files are chunked 
 | `.pptx` | `pip install python-pptx` |
 | `.doc` / `.ppt` | `pip install pywin32` (Windows + Microsoft Office required) |
 
+## Install
+
+Install once as an editable package. This pulls in the runtime dependencies **and** puts a `localfileagent` command on your PATH, so you can run it from any directory:
+
+```bash
+pip install -e .
+```
+
+Then run it anywhere:
+
+```bash
+localfileagent --gui                 # graphical interface
+localfileagent /path/to/dir --chat   # CLI chat
+```
+
+Optional extras — install only what you need:
+
+```bash
+pip install -e ".[parsers]"   # all binary parsers: .pdf .docx .xlsx .xls .pptx
+pip install -e ".[pdf]"       # a single format (also: docx, xlsx, xls, pptx)
+pip install -e ".[legacy]"    # .doc / .ppt via Office COM (Windows only)
+pip install -e ".[dev]"       # pytest + pytest-qt for the test suite
+```
+
+> **`localfileagent: command not found`?** pip installed the script into your Python *scripts* directory, which isn't on your PATH. Print the directory with `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"` and add it to PATH (on Windows it's typically `…\PythonXY\Scripts`, or `…\AppData\Roaming\Python\PythonXY\Scripts` for `--user` installs). You can always skip installing and run `python LocalfileAgent.py …` / `python gui.py` directly.
+
 ## Usage
 
 ```bash
 # Launch the GUI
-python gui.py
+localfileagent --gui
 
 # Summarise all supported files in a directory
-python LocalfileAgent.py /path/to/directory
+localfileagent /path/to/directory
 
 # Summarise specific files
-python LocalfileAgent.py file1.txt file2.py
+localfileagent file1.txt file2.py
 
 # Save summaries to a Markdown file
-python LocalfileAgent.py /path/to/directory --output summaries.md
+localfileagent /path/to/directory --output summaries.md
 
 # Only scan .py and .md files, recursively
-python LocalfileAgent.py /path/to/directory --ext .py .md --recursive
+localfileagent /path/to/directory --ext .py .md --recursive
 
 # Chat mode — RAG Q&A over the files interactively
-python LocalfileAgent.py /path/to/directory --chat
+localfileagent /path/to/directory --chat
 
 # Pick the embedding model and how many chunks to retrieve per question
-python LocalfileAgent.py /path/to/directory --chat --embed-model nomic-embed-text --top-k 8
+localfileagent /path/to/directory --chat --embed-model nomic-embed-text --top-k 8
 
 # Disable RAG — load full file contents into context instead
-python LocalfileAgent.py /path/to/directory --chat --no-rag
+localfileagent /path/to/directory --chat --no-rag
 
 # Use a different chat model
-python LocalfileAgent.py /path/to/directory --chat --model gemma3
+localfileagent /path/to/directory --chat --model gemma3
 ```
+
+> Not installed? Replace `localfileagent` with `python LocalfileAgent.py` (and `localfileagent --gui` with `python gui.py`).
 
 ## CLI Options
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `paths` | | One or more files or directories to scan (required) |
+| `paths` | | One or more files or directories to scan (required unless `--gui`) |
+| `--gui` | | Launch the graphical interface instead of the CLI |
 | `--chat` | `-c` | Interactive Q&A mode instead of summarisation |
 | `--model` | `-m` | Ollama chat model to use (default: `mistral`) |
 | `--embed-model` | | Embedding model for RAG (default: `nomic-embed-text`) |

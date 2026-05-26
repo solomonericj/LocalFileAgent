@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localfileagent"
+version = "0.1.0"
+description = "Scan local files/directories and summarise or chat with them (RAG) using a local Ollama model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",   # RAG vector index
+    "PySide6>=6.5",  # GUI (python LocalfileAgent.py --gui)
+]
+
+[project.optional-dependencies]
+pdf     = ["pypdf"]
+docx    = ["python-docx"]
+xlsx    = ["openpyxl"]
+xls     = ["xlrd"]
+pptx    = ["python-pptx"]
+legacy  = ["pywin32; sys_platform == 'win32'"]                              # .doc/.ppt via Office COM
+parsers = ["pypdf", "python-docx", "openpyxl", "xlrd", "python-pptx"]       # all cross-platform binary parsers
+dev     = ["pytest>=8.0", "pytest-qt>=4.4"]
+
+[project.scripts]
+localfileagent = "LocalfileAgent:main"
+
+[tool.setuptools]
+py-modules = ["LocalfileAgent", "rag", "gui", "session_manager"]

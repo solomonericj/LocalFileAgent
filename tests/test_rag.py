@@ -151,6 +151,26 @@ def test_build_index_embeds_and_caches(tmp_path, monkeypatch):
     assert log2 == []
 
 
+def test_build_index_batches_embeddings(tmp_path, monkeypatch):
+    """Large files must be embedded in batches, not one giant request."""
+    import rag
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(rag, "EMBED_BATCH", 2)
+    f = tmp_path / "doc.txt"
+    f.write_text("x" * 3000)   # ~4 chunks at size=900/step=750
+
+    calls = []
+
+    def embed(texts, model):
+        calls.append(len(texts))
+        return [[float(len(t))] for t in texts]
+
+    idx = build_index([f], "m", embed_fn=embed)
+    assert len(calls) >= 2                  # batched across multiple requests
+    assert all(n <= 2 for n in calls)       # no batch exceeds EMBED_BATCH
+    assert len(idx) >= 3
+
+
 def test_retrieve_returns_relevant_chunks(tmp_path, monkeypatch):
     import rag
     monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)

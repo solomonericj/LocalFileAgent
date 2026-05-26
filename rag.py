@@ -18,6 +18,7 @@ from typing import Callable, Optional
 CHUNK_SIZE    = 900
 CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 5
+EMBED_BATCH   = 64            # chunks embedded per /api/embed request
 CACHE_DIR     = Path.home() / ".localfileagent" / "index"
 
 
@@ -159,7 +160,10 @@ def build_index(files, embed_model: str, *,
         chunks = chunk_text(content, path)
         if not chunks:
             continue
-        vectors = embed_fn([c.text for c in chunks], embed_model)
+        texts = [c.text for c in chunks]
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), EMBED_BATCH):
+            vectors.extend(embed_fn(texts[i:i + EMBED_BATCH], embed_model))
         save_cache(path, embed_model, chunks, vectors)
         index.add(chunks, vectors)
     return index

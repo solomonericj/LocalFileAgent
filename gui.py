@@ -15,9 +15,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
+    QListWidget, QListWidgetItem, QPushButton, QLabel,
     QComboBox, QCheckBox, QLineEdit, QTextEdit, QProgressBar,
-    QFileDialog, QSplitter, QGroupBox, QStatusBar, QMessageBox,
+    QFileDialog, QStatusBar, QMessageBox,
     QFrame, QScrollArea, QDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QElapsedTimer
@@ -28,8 +28,8 @@ from LocalfileAgent import (
     SUPPORTED_EXTENSIONS, DEFAULT_MODEL, OLLAMA_TAGS,
     SUMMARISE_SYSTEM, CHAT_SYSTEM_TEMPLATE, CONTEXT_FILE_CAP,
     RAG_SYSTEM, DEFAULT_EMBED_MODEL,
-    read_file_safe, collect_files, build_file_block,
-    query_ollama_generate, query_ollama_chat, stream_ollama_chat,
+    read_file_safe, collect_files,
+    query_ollama_generate, stream_ollama_chat,
 )
 from rag import build_index, retrieve, build_rag_prompt
 from session_manager import SessionManager
@@ -664,8 +664,8 @@ class SessionDialog(QDialog):
             created = s.get("created", "?")
             model   = s.get("model", "?")
             n_files = len(s.get("files", []))
-            user_msgs = [m for m in s.get("messages", []) if m["role"] == "user"]
-            preview = (user_msgs[0]["content"][:60] + "\u2026") if user_msgs else "(no messages)"
+            user_msgs = [m for m in s.get("messages", []) if m.get("role") == "user"]
+            preview = (user_msgs[0].get("content", "")[:60] + "\u2026") if user_msgs else "(no messages)"
             label = f"{created}  \u00b7  {model}  \u00b7  {n_files} file(s)  \u00b7  {preview}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, s["_path"])
@@ -1213,11 +1213,12 @@ class MainWindow(QMainWindow):
 
         # Replay visible history from messages (skip system prompt)
         for msg in self._chat_messages:
-            if msg["role"] == "user":
-                self._append_chat("You", msg["content"], "#3b82f6")
-            elif msg["role"] == "assistant":
+            role = msg.get("role")
+            if role == "user":
+                self._append_chat("You", msg.get("content", ""), "#3b82f6")
+            elif role == "assistant":
                 model = session.get("model", DEFAULT_MODEL)
-                self._append_chat(model, msg["content"], "#16a34a")
+                self._append_chat(model, msg.get("content", ""), "#16a34a")
 
         for path_str, summary in self._summarize_results.items():
             self._append_system(f"\u2500\u2500 Summary: {Path(path_str).name} \u2500\u2500")

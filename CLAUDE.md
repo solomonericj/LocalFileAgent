@@ -9,35 +9,40 @@ LocalFileAgent scans local files/directories and either summarises them or opens
 ## Running
 
 ```bash
-# CLI
-python LocalfileAgent.py /path/to/dir              # summarise mode
-python LocalfileAgent.py /path/to/dir --chat       # REPL chat mode (RAG by default)
-python LocalfileAgent.py /path/to/dir --chat --embed-model nomic-embed-text --top-k 5
-python LocalfileAgent.py /path/to/dir --chat --no-rag   # disable RAG, stuff full files
-python LocalfileAgent.py /path/to/dir --ext .py .md --recursive
-python LocalfileAgent.py /path/to/dir -o out.md    # .md → Markdown output
+# Install once → installs numpy + PySide6 and puts a `localfileagent` command on PATH
+pip install -e .
 
-# GUI (PySide6)
+# CLI
+localfileagent /path/to/dir              # summarise mode
+localfileagent /path/to/dir --chat       # REPL chat mode (RAG by default)
+localfileagent /path/to/dir --chat --embed-model nomic-embed-text --top-k 5
+localfileagent /path/to/dir --chat --no-rag   # disable RAG, stuff full files
+localfileagent /path/to/dir --ext .py .md --recursive
+localfileagent /path/to/dir -o out.md    # .md → Markdown output
+localfileagent --gui                     # GUI (PySide6)
+
+# Or run the scripts directly without installing:
+python LocalfileAgent.py /path/to/dir    # python LocalfileAgent.py --gui  also works
 python gui.py
 ```
 
-**Runtime deps**: `pip install -r requirements.txt` (numpy, used by the RAG vector index — lazily imported, with `--no-rag` as a fallback). **Tests** (pytest + pytest-qt): `pip install -r requirements-dev.txt` then `pytest tests/ -v`. No linter config or build step. Requires Python 3.10+ and a running `ollama serve` with the target chat model pulled, plus an embeddings model for RAG (`ollama pull nomic-embed-text`).
+**Packaging**: `pyproject.toml` declares the `localfileagent = "LocalfileAgent:main"` console script and the four top-level `py-modules`; binary parsers are optional extras (`.[parsers]` for all, or `.[pdf]`/`.[docx]`/`.[xlsx]`/`.[xls]`/`.[pptx]`, plus `.[legacy]` = pywin32 on Windows). **Runtime deps** (numpy + PySide6) install via `pip install -e .` (or `pip install -r requirements.txt`); numpy is lazily imported, with `--no-rag` as a fallback. **Tests** (pytest + pytest-qt): `pip install -e ".[dev]"` (or `pip install -r requirements-dev.txt`) then `pytest tests/ -v`. No linter config. Requires Python 3.10+ and a running `ollama serve` with the target chat model pulled, plus an embeddings model for RAG (`ollama pull nomic-embed-text`).
 
 ## Architecture
 
 Two entry points share one core module:
 
 - **`LocalfileAgent.py`** — single-file CLI. Sections (delimited by `# ──` banners):
-  - Ollama HTTP helpers (`_post`, `query_ollama_generate`, `query_ollama_chat`, `embed_ollama`, `check_ollama_available`) hit `/api/generate`, `/api/chat`, `/api/embed`, `/api/tags` using `urllib` (no `requests` dependency). `embed_ollama(texts, model)` returns one vector per input and raises `ValueError` if the model returns none. `check_ollama_available(model, embed_model=None)` verifies both models are pulled.
+  - Ollama HTTP helpers (`_post`, `query_ollama_generate`, `query_ollama_chat`, `embed_ollama`, `check_ollama_available`) hit `/api/generate`, `/api/chat`, `/api/embed`, `/api/tags` using `urllib` (no `requests` dependency), all with a `REQUEST_TIMEOUT` (600 s) ceiling. `embed_ollama(texts, model)` returns one vector per input and raises `ValueError` if the model returns none. `check_ollama_available(model, embed_model=None)` verifies both models are pulled (a bare name matches any pulled tag; a `name:tag` must match exactly) and exits cleanly on an unreachable or malformed `/api/tags`.
   - File collection (`collect_files`, `read_file_safe`) deduplicates paths and dispatches by extension.
   - Binary extractors (`_extract_pdf/_docx/_xlsx/_pptx/_xls/_via_word_powerpoint`) lazy-import their backing package and print a friendly `_missing()` hint when absent. `.doc`/`.ppt` go through `pywin32` COM (Windows + Office only).
-  - `run_summarise` and `run_chat` are the two mode entry points called from `main()`. `run_chat` builds a RAG index up front and retrieves per turn unless `--no-rag` is passed (or numpy/embeddings are unavailable, in which case it falls back to full-context stuffing).
+  - `run_summarise` and `run_chat` are the two mode entry points called from `main()`; `main()` first calls `_force_utf8_output()` (so emoji output survives a non-UTF-8 console, e.g. a redirected/piped Windows `cp1252` stream) and dispatches to the GUI (`import gui; gui.main()`) when `--gui` is passed. `run_chat` builds a RAG index up front and retrieves per turn unless `--no-rag` is passed (or numpy/embeddings are unavailable, in which case it falls back to full-context stuffing).
 
-- **`rag.py`** — no-Qt retrieval engine (mirrors `session_manager.py`'s plain-module style). `chunk_text(text, path)` splits files into ~900-char overlapping `Chunk`s; `VectorIndex` stores L2-normalised vectors (numpy) with cosine `search`; per-file disk cache under `~/.localfileagent/index/` keyed by `path+size+mtime+embed-model` (`_cache_key`, `save_cache`, `load_cached`). `build_index(files, embed_model, *, embed_fn=None)` reads→chunks→embeds (cache-aware)→indexes; `retrieve(index, query, embed_model, k)` returns the top-k chunks; `build_rag_prompt(chunks, user_text)` composes the per-turn user message. `embed_fn` is injectable so tests run offline; the real `embed_ollama` is imported lazily inside the functions to avoid a circular import.
+- **`rag.py`** — no-Qt retrieval engine (mirrors `session_manager.py`'s plain-module style). `chunk_text(text, path)` splits files into ~900-char overlapping `Chunk`s; `VectorIndex` stores L2-normalised vectors (numpy) with cosine `search`; per-file disk cache under `~/.localfileagent/index/` keyed by `path+size+mtime+embed-model` (`_cache_key`, `save_cache`, `load_cached`). `build_index(files, embed_model, *, embed_fn=None)` reads→chunks→embeds in batches of `EMBED_BATCH` (64) (cache-aware)→indexes; `retrieve(index, query, embed_model, k)` returns the top-k chunks; `build_rag_prompt(chunks, user_text)` composes the per-turn user message. `embed_fn` is injectable so tests run offline; the real `embed_ollama` is imported lazily inside the functions to avoid a circular import. The disk cache stores chunk metadata as a JSON **string** array (not a pickled object array) and loads with `allow_pickle=False`, so a planted `.npz` cannot execute code.
 
 - **`gui.py`** — PySide6 unified workspace. Widget classes (in order): `FileItemWidget` (single file row with status badge + token count + remove button), `ContextSidebar` (model combo + **embed-model combo** + scrollable file list + drag-drop + token bar), `StreamingChatWorker` (QThread that builds the RAG index on the file-load turn, emits `index_ready`, and injects retrieved chunks into the outgoing message per turn while keeping plain history; emits `token_ready` per chunk), `SessionDialog` (QDialog for browsing/loading/deleting sessions), `MainWindow`. All Ollama calls run in QThread workers — never call network helpers directly from a Qt slot. An indeterminate `QProgressBar` busy indicator with a live elapsed-time readout (`_set_busy`/`_clear_busy`/`_tick_busy`, driven by a `QTimer` + `QElapsedTimer`; `_format_elapsed` renders `3.4s` / `m:ss`) animates in the status bar whenever a worker runs (Indexing… / Thinking… / Responding… / Summarizing…).
 
-- **`session_manager.py`** — no-Qt module. `SessionManager` persists sessions as JSON to `~/.localfileagent/sessions/`. Methods: `save(session) -> Path`, `list() -> list[dict]`, `load(path) -> dict`, `delete(path)`. Sessions store `model`, `embed_model`, `files`, `messages`, and `summaries`.
+- **`session_manager.py`** — no-Qt module. `SessionManager` persists sessions as JSON to `~/.localfileagent/sessions/`. Methods: `save(session) -> Path`, `list() -> list[dict]`, `load(path) -> dict`, `delete(path)`. Sessions store `model`, `embed_model`, `files`, `messages`, `summaries`, and `created` (the filename derives from `created`). `MainWindow` holds the active session's `created` in `_session_created` (set on first save, on `_load_session`, reset in `_new_session`) and reuses it, so auto-save after each reply **updates one file** rather than creating a new file per turn.
 
 - **`LocalfileAgent.py`** also exports `stream_ollama_chat(messages, model) -> Iterator[str]` — yields NDJSON token strings from Ollama's streaming `/api/chat` endpoint.
 
