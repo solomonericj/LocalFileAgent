@@ -192,3 +192,11 @@ def test_build_rag_prompt_formats_context():
 
 def test_build_rag_prompt_no_chunks_passthrough():
     assert build_rag_prompt([], "just this") == "just this"
+
+
+def test_build_rag_prompt_frames_context_as_optional():
+    """Excerpts are presented as possibly-relevant context, not the sole basis
+    for the answer, so the model may also draw on its own knowledge."""
+    chunks = [Chunk("a.txt", "a.txt", "first", 0)]
+    prompt = build_rag_prompt(chunks, "What is X?").lower()
+    assert "may be relevant" in prompt

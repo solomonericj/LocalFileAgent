@@ -67,19 +67,27 @@ SUMMARISE_SYSTEM = (
     "Be direct and factual. Do not repeat the filename."
 )
 
+GENERAL_SYSTEM = (
+    "You are a helpful assistant. Answer the user's questions accurately and "
+    "concisely, drawing on your own knowledge."
+)
+
 CHAT_SYSTEM_TEMPLATE = """\
 You are a helpful assistant with access to the following {n} file(s).
-Answer questions about their content accurately and concisely.
-When referencing specific information, mention which file it came from.
+Answer questions about their content accurately and concisely, and cite which
+file you drew from when you use it. You may also answer questions the files
+don't cover from your own knowledge — don't refuse just because the answer
+isn't in the files.
 
 {file_block}
 """
 
 RAG_SYSTEM = (
-    "You are a helpful assistant. Answer the user's question using only the "
-    "context excerpts provided in their message. Each excerpt is labelled with "
-    "its source file in square brackets. Cite the source file when you reference "
-    "information. If the excerpts do not contain the answer, say so plainly."
+    "You are a helpful assistant. The user's message may include context "
+    "excerpts pulled from their local files, each labelled with its source file "
+    "in square brackets. When an excerpt is relevant, use it and cite the source "
+    "file. When the excerpts don't cover the question, answer normally from your "
+    "own knowledge — do not refuse or say the answer isn't in the files."
 )
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
@@ -514,6 +522,17 @@ def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_
         )
         files = files[:CONTEXT_FILE_CAP]
 
+    if not files:
+        # No files loaded — plain general-assistant chat.
+        messages = [{"role": "system", "content": GENERAL_SYSTEM}]
+        print(
+            "💬  Chat mode — no files loaded, general chat mode. Add files anytime "
+            "for grounded answers.\n"
+            f"    Commands:  /clear  /quit\n{'─'*60}"
+        )
+        _chat_repl(messages, model, index=None, embed_model=embed_model, top_k=top_k)
+        return
+
     index = None
     if use_rag:
         try:
@@ -557,6 +576,13 @@ def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_
             f"    Commands:  /clear  /quit\n{'─'*60}"
         )
 
+    _chat_repl(messages, model, index=index, embed_model=embed_model, top_k=top_k)
+
+
+def _chat_repl(messages: list[dict], model: str, *, index, embed_model: str,
+               top_k: int) -> None:
+    """The shared REPL loop. `index` is a VectorIndex (RAG) or None (general /
+    full-context chat); when None the plain history is sent as-is."""
     while True:
         try:
             user_input = input("\nYou: ").strip()
@@ -569,7 +595,7 @@ def run_chat(files: list[Path], model: str, *, embed_model: str = DEFAULT_EMBED_
             print("Bye!")
             break
         if user_input.lower() == "/clear":
-            messages = [messages[0]]
+            messages[:] = [messages[0]]
             print("🗑  Conversation history cleared.")
             continue
 
@@ -695,8 +721,10 @@ def main() -> None:
         gui.main()
         return
 
-    if not args.paths:
-        parser.error("the following arguments are required: paths (or pass --gui)")
+    # Chat with no paths → general-assistant chat (no files). Summarise still
+    # needs files, so it keeps requiring at least one path.
+    if not args.paths and not args.chat:
+        parser.error("the following arguments are required: paths (or pass --gui / --chat)")
 
     extensions = (
         {e if e.startswith(".") else f".{e}" for e in args.ext}
@@ -707,8 +735,8 @@ def main() -> None:
         embed_model = None if args.no_rag else args.embed_model
         check_ollama_available(args.model, embed_model)
 
-    files = collect_files(args.paths, extensions, args.recursive)
-    if not files:
+    files = collect_files(args.paths, extensions, args.recursive) if args.paths else []
+    if not files and not args.chat:
         print("No matching files found.", file=sys.stderr)
         sys.exit(0)
 

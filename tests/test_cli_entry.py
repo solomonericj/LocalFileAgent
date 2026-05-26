@@ -19,7 +19,20 @@ def test_gui_flag_launches_gui(monkeypatch):
 
 
 def test_requires_paths_without_gui(monkeypatch):
-    """The CLI still requires at least one path when not launching the GUI."""
+    """Summarise (the default) still requires at least one path."""
     monkeypatch.setattr(lfa.sys, "argv", ["localfileagent"])
     with pytest.raises(SystemExit):
         lfa.main()
+
+
+def test_chat_without_paths_runs_general_chat(monkeypatch):
+    """`localfileagent --chat` with no paths starts general chat (no files)."""
+    monkeypatch.setattr(lfa.sys, "argv", ["localfileagent", "--chat", "--no-check"])
+    monkeypatch.setattr(lfa, "collect_files",
+                        lambda *a, **k: pytest.fail("must not collect files with no paths"))
+    captured = {}
+    monkeypatch.setattr(lfa, "run_chat",
+                        lambda files, model, **k: captured.update(files=files))
+
+    lfa.main()
+    assert captured.get("files") == []
