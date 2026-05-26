@@ -10,11 +10,17 @@ Modes
 
 Usage
 -----
+  # After `pip install -e .` the `localfileagent` command is on your PATH:
+  localfileagent /path/to/directory
+  localfileagent file1.txt file2.py --output summaries.md
+  localfileagent /path/to/dir --ext .py .md --recursive
+  localfileagent /path/to/dir --chat
+  localfileagent /path/to/dir --chat --model gemma3
+  localfileagent --gui                      # launch the graphical interface
+
+  # Or run the scripts directly without installing:
   python LocalfileAgent.py /path/to/directory
-  python LocalfileAgent.py file1.txt file2.py --output summaries.md
-  python LocalfileAgent.py /path/to/dir --ext .py .md --recursive
-  python LocalfileAgent.py /path/to/dir --chat
-  python LocalfileAgent.py /path/to/dir --chat --model gemma3
+  python LocalfileAgent.py --gui
 """
 
 import argparse
@@ -35,6 +41,7 @@ OLLAMA_GENERATE   = "http://localhost:11434/api/generate"
 OLLAMA_CHAT       = "http://localhost:11434/api/chat"
 OLLAMA_TAGS       = "http://localhost:11434/api/tags"
 OLLAMA_EMBED      = "http://localhost:11434/api/embed"
+REQUEST_TIMEOUT   = 600       # seconds; generous ceiling for slow local generation
 MAX_FILE_BYTES    = 200_000   # skip text files larger than ~200 KB
 MAX_EXTRACT_CHARS = 400_000   # cap extracted text from binary docs
 CONTEXT_FILE_CAP  = 20        # max files loaded into chat context
@@ -77,7 +84,7 @@ RAG_SYSTEM = (
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
 
-def _post(url: str, payload: dict, timeout: int = 6000) -> dict:
+def _post(url: str, payload: dict, timeout: int = REQUEST_TIMEOUT) -> dict:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=data,
@@ -154,7 +161,7 @@ def stream_ollama_chat(messages: list[dict], model: str) -> Iterator[str]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=6000) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
             phase: str | None = None  # None | "thinking" | "content"
             for raw_line in resp:
                 line = raw_line.strip()
@@ -208,19 +215,30 @@ def check_ollama_available(model: str, embed_model: str | None = None) -> None:
         req = urllib.request.Request(OLLAMA_TAGS)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
-        available = [m["name"].split(":")[0] for m in data.get("models", [])]
-        wanted = [model] + ([embed_model] if embed_model else [])
-        missing = [m for m in wanted if m.split(":")[0] not in available]
-        if missing:
-            print(
-                f"⚠  Model(s) not found locally: {', '.join(missing)}\n"
-                f"   Available: {', '.join(available) or 'none'}\n"
-                f"   Pull with:  {'; '.join(f'ollama pull {m}' for m in missing)}\n",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        available = [m["name"] for m in data["models"]]   # full names, tags kept
     except urllib.error.URLError:
         print("✗  Ollama is not running.  Start it with:  ollama serve", file=sys.stderr)
+        sys.exit(1)
+    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+        print(f"✗  Unexpected response from Ollama at {OLLAMA_TAGS}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # A bare name (e.g. "mistral") matches any pulled tag; a tagged request
+    # (e.g. "mistral:7b") must match exactly.
+    available_bases = {n.split(":")[0] for n in available}
+    wanted = [model] + ([embed_model] if embed_model else [])
+    missing = []
+    for m in wanted:
+        present = (m in available) if ":" in m else (m.split(":")[0] in available_bases)
+        if not present:
+            missing.append(m)
+    if missing:
+        print(
+            f"⚠  Model(s) not found locally: {', '.join(missing)}\n"
+            f"   Available: {', '.join(available) or 'none'}\n"
+            f"   Pull with:  {'; '.join(f'ollama pull {m}' for m in missing)}\n",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -418,6 +436,7 @@ def run_summarise(files: list[Path], model: str, output: str | None) -> None:
     results: list[tuple[Path, str]] = []
     for i, path in enumerate(files, 1):
         print(f"[{i}/{len(files)}] {path.name}", end=" … ", flush=True)
+        elapsed = 0.0
         content = read_file_safe(path)
         if content is None:
             try:
@@ -592,7 +611,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("paths", nargs="+", help="Files or directories to scan.")
+    p.add_argument("paths", nargs="*", help="Files or directories to scan (omit when using --gui).")
+    p.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the graphical interface instead of the CLI.",
+    )
     p.add_argument(
         "--chat", "-c",
         action="store_true",
@@ -642,8 +666,37 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _force_utf8_output(streams=None) -> None:
+    """Make stdout/stderr tolerate the emoji/box-drawing glyphs we print, even
+    when the console's locale encoding (e.g. cp1252 on Windows) cannot — without
+    this a redirected or piped run dies with UnicodeEncodeError on the first ✓."""
+    for stream in (streams if streams is not None else (sys.stdout, sys.stderr)):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+
+
 def main() -> None:
-    args = build_parser().parse_args()
+    _force_utf8_output()
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.gui:
+        try:
+            import gui
+        except ImportError as exc:
+            print(f"✗  The GUI needs PySide6 — install it:  pip install PySide6\n   ({exc})",
+                  file=sys.stderr)
+            sys.exit(1)
+        gui.main()
+        return
+
+    if not args.paths:
+        parser.error("the following arguments are required: paths (or pass --gui)")
 
     extensions = (
         {e if e.startswith(".") else f".{e}" for e in args.ext}

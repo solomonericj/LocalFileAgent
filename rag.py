@@ -18,6 +18,7 @@ from typing import Callable, Optional
 CHUNK_SIZE    = 900
 CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 5
+EMBED_BATCH   = 64            # chunks embedded per /api/embed request
 CACHE_DIR     = Path.home() / ".localfileagent" / "index"
 
 
@@ -116,7 +117,10 @@ def save_cache(path: Path, embed_model: str, chunks: list[Chunk],
     np.savez(
         _cache_path(_cache_key(path, embed_model)),
         vectors=np.asarray(vectors, dtype=np.float32),
-        meta=np.array(json.dumps(meta), dtype=object),
+        # Store metadata as a plain unicode-string array (not an object array),
+        # so the cache loads with allow_pickle=False — a planted .npz can never
+        # execute code via unpickling.
+        meta=np.array(json.dumps(meta)),
     )
 
 
@@ -126,7 +130,7 @@ def load_cached(path: Path, embed_model: str) -> Optional[tuple[list[Chunk], lis
     if not cache_file.exists():
         return None
     try:
-        data = np.load(cache_file, allow_pickle=True)
+        data = np.load(cache_file, allow_pickle=False)
         meta = json.loads(str(data["meta"]))
         chunks = [Chunk(m["source"], m["path"], m["text"], m["index"]) for m in meta]
         vectors = data["vectors"].tolist()
@@ -156,7 +160,10 @@ def build_index(files, embed_model: str, *,
         chunks = chunk_text(content, path)
         if not chunks:
             continue
-        vectors = embed_fn([c.text for c in chunks], embed_model)
+        texts = [c.text for c in chunks]
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), EMBED_BATCH):
+            vectors.extend(embed_fn(texts[i:i + EMBED_BATCH], embed_model))
         save_cache(path, embed_model, chunks, vectors)
         index.add(chunks, vectors)
     return index

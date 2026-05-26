@@ -44,3 +44,40 @@ def test_sidebar_embed_model_default(qtbot):
     sb = ContextSidebar()
     qtbot.addWidget(sb)
     assert sb.embed_model() == DEFAULT_EMBED_MODEL
+
+
+def test_token_warning_is_rag_aware_when_large(qtbot, tmp_path):
+    """A large corpus must not be framed as 'context nearly full — remove files'
+    (false under RAG, which retrieves only the most relevant chunks)."""
+    from gui import ContextSidebar, FileItemWidget
+    sb = ContextSidebar()
+    qtbot.addWidget(sb)
+    f = tmp_path / "big.txt"
+    f.write_text("x")
+    sb.add_path(str(f))
+    sb.set_file_status(str(f), FileItemWidget.STATUS_LOADED, token_count=40_000)  # > 32k
+
+    warning = sb._token_warning.text().lower()
+    assert "rag" in warning
+    assert "remove files" not in warning
+
+
+def test_file_dialog_skips_unsupported_extensions(qtbot, tmp_path, monkeypatch):
+    """Files picked via the dialog's 'All Files' filter that the app can't read
+    must be skipped, matching drag-and-drop behaviour."""
+    import gui
+    from gui import ContextSidebar
+    sb = ContextSidebar()
+    qtbot.addWidget(sb)
+    good = tmp_path / "a.py"
+    good.write_text("x")
+    bad = tmp_path / "b.bin"
+    bad.write_text("x")
+    monkeypatch.setattr(gui.QFileDialog, "getOpenFileNames",
+                        lambda *a, **k: ([str(good), str(bad)], ""))
+
+    sb._add_files_dialog()
+
+    paths = sb.get_paths()
+    assert str(good) in paths
+    assert str(bad) not in paths
