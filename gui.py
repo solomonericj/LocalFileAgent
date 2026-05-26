@@ -104,7 +104,8 @@ class StreamingChatWorker(QThread):
     def __init__(self, messages: list, model: str, *,
                  files_to_load: list = None, user_text: str = None,
                  rag_index=None, embed_model: str = DEFAULT_EMBED_MODEL,
-                 top_k: int = 5, use_rag: bool = True):
+                 top_k: int = 5, use_rag: bool = True,
+                 preserve_history: bool = False):
         super().__init__()
         self.messages = list(messages)         # snapshot — never share the live list
         self.model = model
@@ -114,11 +115,17 @@ class StreamingChatWorker(QThread):
         self.embed_model = embed_model
         self.top_k = top_k
         self.use_rag = use_rag
+        # When True, build/rebuild the index but DON'T reset self.messages — used
+        # to re-index a resumed session on its next turn without wiping history.
+        self.preserve_history = preserve_history
 
     def run(self):
         try:
             if self.files_to_load is not None:
-                if self.use_rag:
+                if self.preserve_history:
+                    # Resumed session: rebuild the index but keep replayed history.
+                    self._rebuild_index_keep_history()
+                elif self.use_rag:
                     index = self._build_rag_index()
                     if index is not None:
                         self.rag_index = index
@@ -140,6 +147,8 @@ class StreamingChatWorker(QThread):
             accumulated = ""
             t0 = time.monotonic()
             for token in stream_ollama_chat(api_messages, self.model):
+                if self.isInterruptionRequested():
+                    break   # window is closing — stop promptly so the thread can exit
                 accumulated += token
                 self.token_ready.emit(token)
             elapsed = time.monotonic() - t0
@@ -179,6 +188,19 @@ class StreamingChatWorker(QThread):
                 est = 0
             self.file_status.emit(str(path), FileItemWidget.STATUS_LOADED, est)
         return index
+
+    def _rebuild_index_keep_history(self):
+        """Resumed-session path: rebuild the vector index without disturbing the
+        replayed history (self.messages already ends with the new user turn).
+        The next turn's retrieval then fires via the freshly cached index."""
+        index = self._build_rag_index()
+        if index is not None:
+            self.rag_index = index
+            self.index_ready.emit(index)
+        else:
+            self.context_info.emit(
+                "Could not rebuild the index — answering without retrieval this turn."
+            )
 
     def _load_full_context(self):
         """Original context-stuffing path; sets self.messages in place."""
@@ -702,9 +724,10 @@ class MainWindow(QMainWindow):
         self._chat_files_loaded = False
         self._chat_generation = 0
         self._rag_index = None            # cached VectorIndex for the loaded files
+        self._session_created = None      # stable id for the active session's file
 
         # Streaming state
-        self._stream_block: int | None = None   # QTextDocument block number
+        self._stream_cursor = None   # QTextCursor parked just before the ▌ marker
         self._stream_text = ""
 
         # Summarize results for current session
@@ -893,49 +916,48 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _start_stream_bubble(self, model_name: str):
-        """Append an empty assistant bubble; track its block for token insertion."""
+        """Append an empty assistant bubble and park a cursor just before the ▌
+        so streamed tokens (which may contain newlines) insert in the right spot."""
         escaped = html.escape(model_name)
         self._chat_history.append(
             f'<p><b><span style="color:#16a34a">{escaped}:</span></b> ▌</p>'
         )
-        self._stream_block = self._chat_history.document().blockCount() - 1
+        cursor = self._chat_history.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter)
+        self._stream_cursor = cursor
         self._stream_text = ""
         sb = self._chat_history.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def _on_token_ready(self, token: str):
-        """Insert token before the ▌ cursor in the streaming bubble."""
+        """Insert a token just before the ▌ marker via the parked cursor.
+
+        A persistent cursor (rather than a cached block number) keeps insertion
+        correct even when a token contains newlines: QTextCursor.insertText turns
+        '\\n' into new blocks, which would strand a block-number-based cursor and
+        scramble the text.
+        """
+        if self._stream_cursor is None:
+            return
         if self._stream_text == "":
             # First token has arrived — the model is no longer just thinking.
             self._status_bar.showMessage("Responding…")
-        doc = self._chat_history.document()
-        block = doc.findBlockByNumber(self._stream_block)
-        cursor = QTextCursor(block)
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        # Select and replace the trailing ▌ with token + new ▌
-        cursor.movePosition(
-            QTextCursor.MoveOperation.PreviousCharacter,
-            QTextCursor.MoveMode.KeepAnchor,
-        )
-        cursor.insertText(token + "▌")
+        self._stream_cursor.insertText(token)
         self._stream_text += token
         sb = self._chat_history.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def _finish_stream(self):
-        """Remove the ▌ cursor character from the completed bubble."""
-        if self._stream_block is None:
+        """Remove the trailing ▌ marker (it sits just after the parked cursor)."""
+        if self._stream_cursor is None:
             return
-        doc = self._chat_history.document()
-        block = doc.findBlockByNumber(self._stream_block)
-        cursor = QTextCursor(block)
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        cursor.movePosition(
-            QTextCursor.MoveOperation.PreviousCharacter,
+        self._stream_cursor.movePosition(
+            QTextCursor.MoveOperation.NextCharacter,
             QTextCursor.MoveMode.KeepAnchor,
         )
-        cursor.removeSelectedText()
-        self._stream_block = None
+        self._stream_cursor.removeSelectedText()
+        self._stream_cursor = None
 
     def _set_chat_input_enabled(self, enabled: bool):
         self._send_btn.setEnabled(enabled)
@@ -969,6 +991,42 @@ class MainWindow(QMainWindow):
         minutes, secs = divmod(int(seconds), 60)
         return f"{minutes}:{secs:02d}"
 
+    # -- worker lifecycle --
+
+    def _operation_in_progress(self) -> bool:
+        """True while a chat or summarize worker is still running, so we never
+        start a second one on top of it — that would race the busy indicator and
+        drop the reference to a live QThread (crash on GC)."""
+        for attr in ("_chat_worker", "_summarize_worker"):
+            worker = getattr(self, attr, None)
+            if worker is None:
+                continue
+            try:
+                if worker.isRunning():
+                    return True
+            except (RuntimeError, AttributeError):
+                continue
+        return False
+
+    def _shutdown_workers(self):
+        """Interrupt and wait for any running worker threads, so closing the
+        window never destroys a QThread mid-run."""
+        for attr in ("_model_worker", "_chat_worker", "_summarize_worker"):
+            worker = getattr(self, attr, None)
+            if worker is None:
+                continue
+            try:
+                running = worker.isRunning()
+            except (RuntimeError, AttributeError):
+                continue
+            if running:
+                worker.requestInterruption()
+                worker.wait(3000)
+
+    def closeEvent(self, event):
+        self._shutdown_workers()
+        super().closeEvent(event)
+
     # -- chat send and reply handlers --
 
     def _send_chat(self):
@@ -980,6 +1038,9 @@ class MainWindow(QMainWindow):
         if not model:
             QMessageBox.warning(self, "No Model", "Please select or enter a model name.")
             return
+
+        if self._operation_in_progress():
+            return   # a worker is still running; ignore until it finishes
 
         self._chat_input.clear()
         self._set_chat_input_enabled(False)
@@ -1016,12 +1077,31 @@ class MainWindow(QMainWindow):
         else:
             self._chat_messages.append({"role": "user", "content": user_text})
             self._append_chat("You", user_text, "#3b82f6")
-            self._chat_worker = StreamingChatWorker(
-                list(self._chat_messages), model,
-                rag_index=self._rag_index, embed_model=embed_model,
-                user_text=user_text,
-            )
-            busy_msg = "Thinking…"
+            valid_paths = self._sidebar.get_valid_paths()
+            if self._rag_index is None and valid_paths:
+                # Resumed session: the index wasn't rebuilt on load. Rebuild it on
+                # this turn while keeping the replayed history, so retrieval fires
+                # instead of sending a contextless RAG prompt.
+                files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
+                self._append_system(f"Re-indexing {len(files)} file(s)…")
+                self._chat_worker = StreamingChatWorker(
+                    list(self._chat_messages), model,
+                    files_to_load=files, user_text=user_text,
+                    preserve_history=True, embed_model=embed_model,
+                )
+                self._chat_worker.context_info.connect(self._on_context_info)
+                self._chat_worker.index_ready.connect(self._on_index_ready)
+                self._chat_worker.file_status.connect(
+                    lambda p, s, t: self._sidebar.set_file_status(p, s, t)
+                )
+                busy_msg = "Indexing…"
+            else:
+                self._chat_worker = StreamingChatWorker(
+                    list(self._chat_messages), model,
+                    rag_index=self._rag_index, embed_model=embed_model,
+                    user_text=user_text,
+                )
+                busy_msg = "Thinking…"
 
         self._last_elapsed = 0.0
         self._start_stream_bubble(model)
@@ -1075,10 +1155,15 @@ class MainWindow(QMainWindow):
             "messages":    self._chat_messages,
             "summaries":   self._summarize_results,
         }
+        # Reuse this session's identity so every reply updates ONE file rather
+        # than spawning a new file per turn (the filename derives from 'created').
+        if self._session_created:
+            session["created"] = self._session_created
         try:
             self._session_manager.save(session)
         except OSError:
-            pass   # non-fatal; don't interrupt the user
+            return   # non-fatal; don't interrupt the user
+        self._session_created = session["created"]
 
     def _open_sessions(self):
         dlg = SessionDialog(self._session_manager, parent=self)
@@ -1095,6 +1180,7 @@ class MainWindow(QMainWindow):
         self._chat_history.clear()
         self._chat_messages = []
         self._rag_index = None
+        self._session_created = None
         self._chat_files_loaded = False
         self._chat_generation += 1
         self._summarize_results = {}
@@ -1122,6 +1208,8 @@ class MainWindow(QMainWindow):
         self._sidebar.populate_from_paths(session.get("files", []))
         self._chat_messages = session.get("messages", [])
         self._summarize_results = session.get("summaries", {})
+        # Continue writing to the loaded session's file, not a fresh one.
+        self._session_created = session.get("created")
 
         # Replay visible history from messages (skip system prompt)
         for msg in self._chat_messages:
@@ -1164,6 +1252,8 @@ class MainWindow(QMainWindow):
             self._summarize_btns_layout.addWidget(btn)
 
     def _run_single_summarize(self, path_str: str):
+        if self._operation_in_progress():
+            return
         model = self._sidebar.model()
         self._set_chat_input_enabled(False)
         self._append_system(f"Summarizing {Path(path_str).name}…")

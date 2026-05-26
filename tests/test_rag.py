@@ -86,6 +86,22 @@ def test_cache_round_trip(tmp_path, monkeypatch):
     assert cached_vecs[0] == [0.5, 0.5]
 
 
+def test_cache_loads_without_pickle(tmp_path, monkeypatch):
+    """The on-disk cache must not rely on Python pickle — loading a planted
+    .npz must never be able to execute arbitrary code (allow_pickle=False)."""
+    import rag
+    import numpy as np
+    monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)
+    f = tmp_path / "doc.txt"
+    f.write_text("hello")
+    save_cache(f, "m", [Chunk("doc.txt", str(f), "hello", 0)], [[0.1, 0.2]])
+
+    cache_file = rag._cache_path(rag._cache_key(f, "m"))
+    data = np.load(cache_file, allow_pickle=False)   # must not raise
+    assert data["vectors"].shape == (1, 2)
+    assert str(data["meta"])                          # readable without unpickling
+
+
 def test_cache_miss_when_file_changes(tmp_path, monkeypatch):
     import rag
     monkeypatch.setattr(rag, "CACHE_DIR", tmp_path)

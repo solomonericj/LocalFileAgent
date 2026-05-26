@@ -116,7 +116,10 @@ def save_cache(path: Path, embed_model: str, chunks: list[Chunk],
     np.savez(
         _cache_path(_cache_key(path, embed_model)),
         vectors=np.asarray(vectors, dtype=np.float32),
-        meta=np.array(json.dumps(meta), dtype=object),
+        # Store metadata as a plain unicode-string array (not an object array),
+        # so the cache loads with allow_pickle=False — a planted .npz can never
+        # execute code via unpickling.
+        meta=np.array(json.dumps(meta)),
     )
 
 
@@ -126,7 +129,7 @@ def load_cached(path: Path, embed_model: str) -> Optional[tuple[list[Chunk], lis
     if not cache_file.exists():
         return None
     try:
-        data = np.load(cache_file, allow_pickle=True)
+        data = np.load(cache_file, allow_pickle=False)
         meta = json.loads(str(data["meta"]))
         chunks = [Chunk(m["source"], m["path"], m["text"], m["index"]) for m in meta]
         vectors = data["vectors"].tolist()

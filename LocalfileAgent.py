@@ -418,6 +418,7 @@ def run_summarise(files: list[Path], model: str, output: str | None) -> None:
     results: list[tuple[Path, str]] = []
     for i, path in enumerate(files, 1):
         print(f"[{i}/{len(files)}] {path.name}", end=" … ", flush=True)
+        elapsed = 0.0
         content = read_file_safe(path)
         if content is None:
             try:
@@ -642,7 +643,22 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _force_utf8_output(streams=None) -> None:
+    """Make stdout/stderr tolerate the emoji/box-drawing glyphs we print, even
+    when the console's locale encoding (e.g. cp1252 on Windows) cannot — without
+    this a redirected or piped run dies with UnicodeEncodeError on the first ✓."""
+    for stream in (streams if streams is not None else (sys.stdout, sys.stderr)):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+
+
 def main() -> None:
+    _force_utf8_output()
     args = build_parser().parse_args()
 
     extensions = (
