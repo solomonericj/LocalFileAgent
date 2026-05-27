@@ -45,6 +45,7 @@ REQUEST_TIMEOUT   = 600       # seconds; generous ceiling for slow local generat
 MAX_FILE_BYTES    = 200_000   # skip text files larger than ~200 KB
 MAX_EXTRACT_CHARS = 400_000   # cap extracted text from binary docs
 CONTEXT_FILE_CAP  = 20        # max files loaded into chat context
+MAX_CLARIFY_ROUNDS = 3        # max clarifying questions per user turn
 
 TEXT_EXTENSIONS = {
     ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx",
@@ -88,6 +89,18 @@ RAG_SYSTEM = (
     "in square brackets. When an excerpt is relevant, use it and cite the source "
     "file. When the excerpts don't cover the question, answer normally from your "
     "own knowledge — do not refuse or say the answer isn't in the files."
+)
+
+_CLARIFY_PROBE = (
+    "[META-TASK: Do not answer the user's previous message yet.]\n"
+    "Rate your confidence (0–100) that you fully understand what is being asked "
+    "given the conversation context.\n\n"
+    "If confidence < 95, respond ONLY with:\n"
+    "CONFIDENCE: <number>\n"
+    "QUESTION: <one concise clarifying question>\n\n"
+    "If confidence >= 95, respond ONLY with:\n"
+    "CONFIDENCE: 95\n"
+    "PROCEED"
 )
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
@@ -248,6 +261,40 @@ def check_ollama_available(model: str, embed_model: str | None = None) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def run_clarification_check(messages: list[dict], model: str) -> tuple[int, str | None]:
+    """Non-destructively probe the LLM for clarity on the most recent user message.
+
+    Returns (confidence, question) where question is None when the LLM is >=95%
+    confident. Never raises — returns (95, None) on any error so chat is never
+    blocked by a failed probe.
+    """
+    probe = list(messages) + [{"role": "user", "content": _CLARIFY_PROBE}]
+    try:
+        reply, _ = query_ollama_chat(probe, model)
+    except Exception:
+        return 95, None
+
+    confidence = 95
+    question = None
+    for line in reply.splitlines():
+        s = line.strip()
+        upper = s.upper()
+        if upper.startswith("CONFIDENCE:"):
+            raw = s.split(":", 1)[1].strip()
+            digits = "".join(c for c in raw if c.isdigit())[:3]
+            if digits:
+                try:
+                    confidence = int(digits)
+                except ValueError:
+                    pass
+        elif upper.startswith("QUESTION:"):
+            question = s.split(":", 1)[1].strip()
+
+    if confidence >= 95 or "PROCEED" in reply.upper() or not question:
+        return 95, None
+    return confidence, question
 
 
 # ── File collection ───────────────────────────────────────────────────────────
@@ -602,6 +649,24 @@ def _chat_repl(messages: list[dict], model: str, *, index, embed_model: str,
         # Persisted history keeps the plain user text; only the outgoing copy
         # gets the retrieved context injected into the latest turn.
         messages.append({"role": "user", "content": user_input})
+        orig_idx = len(messages) - 1   # position of the original question
+
+        # Clarification loop — ask at most MAX_CLARIFY_ROUNDS questions before
+        # proceeding; the Q&A exchange is kept in the persisted history.
+        for _ in range(MAX_CLARIFY_ROUNDS):
+            confidence, question = run_clarification_check(messages, model)
+            if confidence >= 95 or question is None:
+                break
+            print(f"\n{model} [clarifying]: {question}")
+            messages.append({"role": "assistant", "content": question})
+            try:
+                clarify_answer = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n\nBye!")
+                return
+            if not clarify_answer:
+                break
+            messages.append({"role": "user", "content": clarify_answer})
 
         if index is not None:
             from rag import retrieve, build_rag_prompt
@@ -610,9 +675,13 @@ def _chat_repl(messages: list[dict], model: str, *, index, embed_model: str,
             except (ConnectionError, TimeoutError) as exc:
                 print(f"\n✗  {exc}", file=sys.stderr)
                 sys.exit(1)
-            api_messages = messages[:-1] + [
-                {"role": "user", "content": build_rag_prompt(chunks, user_input)}
-            ]
+            # Inject RAG context into the original question, not the last message,
+            # so that clarification answers remain intact in the API call.
+            api_messages = (
+                messages[:orig_idx]
+                + [{"role": "user", "content": build_rag_prompt(chunks, user_input)}]
+                + messages[orig_idx + 1:]
+            )
         else:
             api_messages = messages
 

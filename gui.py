@@ -30,6 +30,7 @@ from LocalfileAgent import (
     RAG_SYSTEM, GENERAL_SYSTEM, DEFAULT_EMBED_MODEL,
     read_file_safe, collect_files,
     query_ollama_generate, stream_ollama_chat,
+    run_clarification_check, MAX_CLARIFY_ROUNDS,
 )
 from rag import build_index, retrieve, build_rag_prompt
 from session_manager import SessionManager
@@ -47,6 +48,33 @@ class ModelFetchWorker(QThread):
                 data = json.loads(resp.read())
             models = [m["name"] for m in data.get("models", [])]
             self.models_ready.emit(models)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class ClarificationWorker(QThread):
+    """Probe the LLM for clarity on the most recent user turn.
+
+    Emits question_ready(str) if the LLM needs one more piece of information,
+    or proceed() when confidence >= 95% or MAX_CLARIFY_ROUNDS has been reached.
+    On any error emits proceed() so the chat is never blocked.
+    """
+    question_ready = Signal(str)
+    proceed = Signal()
+    error = Signal(str)
+
+    def __init__(self, messages: list, model: str):
+        super().__init__()
+        self.messages = list(messages)
+        self.model = model
+
+    def run(self):
+        try:
+            confidence, question = run_clarification_check(self.messages, self.model)
+            if question:
+                self.question_ready.emit(question)
+            else:
+                self.proceed.emit()
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -105,7 +133,8 @@ class StreamingChatWorker(QThread):
                  files_to_load: list = None, user_text: str = None,
                  rag_index=None, embed_model: str = DEFAULT_EMBED_MODEL,
                  top_k: int = 5, use_rag: bool = True,
-                 preserve_history: bool = False):
+                 preserve_history: bool = False,
+                 initial_exchange: list = None):
         super().__init__()
         self.messages = list(messages)         # snapshot — never share the live list
         self.model = model
@@ -118,6 +147,9 @@ class StreamingChatWorker(QThread):
         # When True, build/rebuild the index but DON'T reset self.messages — used
         # to re-index a resumed session on its next turn without wiping history.
         self.preserve_history = preserve_history
+        # Clarification Q&A to insert between the system prompt and the first
+        # user turn on the initial (pre-file-load) message.
+        self.initial_exchange = list(initial_exchange) if initial_exchange else []
 
     def run(self):
         try:
@@ -132,6 +164,7 @@ class StreamingChatWorker(QThread):
                         self.index_ready.emit(index)
                         self.messages = [
                             {"role": "system", "content": RAG_SYSTEM},
+                            *self.initial_exchange,
                             {"role": "user", "content": self.user_text},
                         ]
                     else:
@@ -146,6 +179,7 @@ class StreamingChatWorker(QThread):
                 # Seed the general-assistant system prompt so the model gets one.
                 self.messages = [
                     {"role": "system", "content": GENERAL_SYSTEM},
+                    *self.initial_exchange,
                     {"role": "user", "content": self.user_text},
                 ]
 
@@ -230,6 +264,7 @@ class StreamingChatWorker(QThread):
         self.context_info.emit(info)
         self.messages = [
             {"role": "system", "content": CHAT_SYSTEM_TEMPLATE.format(n=loaded, file_block=file_block)},
+            *self.initial_exchange,
             {"role": "user", "content": self.user_text},
         ]
 
@@ -737,6 +772,13 @@ class MainWindow(QMainWindow):
         self._rag_index = None            # cached VectorIndex for the loaded files
         self._session_created = None      # stable id for the active session's file
 
+        # Clarification state
+        self._clarifying = False          # True while waiting for a clarification answer
+        self._clarify_round = 0           # questions asked so far this turn
+        self._clarify_orig_user_text = "" # original user message (used for RAG)
+        self._clarify_first_turn = False  # True when files haven't been loaded yet
+        self._clarify_exchange: list = [] # Q&A messages for first-turn exchange
+
         # Streaming state
         self._stream_cursor = None   # QTextCursor parked just before the ▌ marker
         self._stream_text = ""
@@ -1008,7 +1050,7 @@ class MainWindow(QMainWindow):
         """True while a chat or summarize worker is still running, so we never
         start a second one on top of it — that would race the busy indicator and
         drop the reference to a live QThread (crash on GC)."""
-        for attr in ("_chat_worker", "_summarize_worker"):
+        for attr in ("_chat_worker", "_summarize_worker", "_clarify_worker"):
             worker = getattr(self, attr, None)
             if worker is None:
                 continue
@@ -1022,7 +1064,7 @@ class MainWindow(QMainWindow):
     def _shutdown_workers(self):
         """Interrupt and wait for any running worker threads, so closing the
         window never destroys a QThread mid-run."""
-        for attr in ("_model_worker", "_chat_worker", "_summarize_worker"):
+        for attr in ("_model_worker", "_chat_worker", "_summarize_worker", "_clarify_worker"):
             worker = getattr(self, attr, None)
             if worker is None:
                 continue
@@ -1051,31 +1093,115 @@ class MainWindow(QMainWindow):
             return
 
         if self._operation_in_progress():
-            return   # a worker is still running; ignore until it finishes
+            return
 
         self._chat_input.clear()
         self._set_chat_input_enabled(False)
 
-        generation = self._chat_generation
+        if self._clarifying:
+            self._handle_clarification_answer(user_text)
+        else:
+            self._start_new_question(user_text)
 
+    def _start_new_question(self, user_text: str):
+        """Handle a fresh user question: display it, then run a clarification check."""
+        self._clarify_orig_user_text = user_text
+        self._clarify_round = 0
+        self._append_chat("You", user_text, "#3b82f6")
+
+        self._clarify_first_turn = not self._chat_files_loaded
+
+        if self._clarify_first_turn:
+            # No file context yet — probe with just the user message.
+            self._clarify_exchange = []
+            probe = [{"role": "user", "content": user_text}]
+        else:
+            self._chat_messages.append({"role": "user", "content": user_text})
+            probe = list(self._chat_messages)
+
+        self._run_clarification(probe)
+
+    def _handle_clarification_answer(self, answer: str):
+        """Handle user's answer to a clarifying question, then re-check or proceed."""
+        self._append_chat("You", answer, "#3b82f6")
+        self._clarify_round += 1
+
+        if self._clarify_first_turn:
+            self._clarify_exchange.append({"role": "user", "content": answer})
+            probe = (
+                [{"role": "user", "content": self._clarify_orig_user_text}]
+                + self._clarify_exchange
+            )
+        else:
+            self._chat_messages.append({"role": "user", "content": answer})
+            probe = list(self._chat_messages)
+
+        if self._clarify_round >= MAX_CLARIFY_ROUNDS:
+            self._clarifying = False
+            self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
+            self._dispatch_real_answer()
+        else:
+            self._run_clarification(probe)
+
+    def _run_clarification(self, probe_messages: list):
+        model = self._sidebar.model()
+        self._clarify_worker = ClarificationWorker(probe_messages, model)
+        self._clarify_worker.question_ready.connect(self._on_clarify_question)
+        self._clarify_worker.proceed.connect(self._on_clarify_proceed)
+        self._clarify_worker.error.connect(self._on_clarify_error)
+        self._set_busy("Thinking…")
+        self._clarify_worker.start()
+
+    def _on_clarify_question(self, question: str):
+        self._clear_busy()
+        model = self._sidebar.model()
+        self._append_chat(model, question, "#16a34a")
+
+        if self._clarify_first_turn:
+            self._clarify_exchange.append({"role": "assistant", "content": question})
+        else:
+            self._chat_messages.append({"role": "assistant", "content": question})
+
+        self._clarifying = True
+        self._chat_input.setPlaceholderText("Answer the question above, then press Enter…")
+        self._set_chat_input_enabled(True)
+        self._chat_input.setFocus()
+
+    def _on_clarify_proceed(self):
+        self._clear_busy()
+        self._clarifying = False
+        self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
+        self._dispatch_real_answer()
+
+    def _on_clarify_error(self, _msg: str):
+        self._clear_busy()
+        self._clarifying = False
+        self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
+        # On error, skip clarification rather than blocking the user.
+        self._dispatch_real_answer()
+
+    def _dispatch_real_answer(self):
+        """Dispatch the StreamingChatWorker once clarification is complete."""
+        user_text = self._clarify_orig_user_text
+        model = self._sidebar.model()
         embed_model = self._sidebar.embed_model() or DEFAULT_EMBED_MODEL
+        generation = self._chat_generation
 
         if not self._chat_files_loaded:
             valid_paths = self._sidebar.get_valid_paths()
+            initial_exchange = self._clarify_exchange if self._clarify_first_turn else []
+
             if not valid_paths:
-                # No files loaded — general-assistant chat. Dispatch a worker
-                # with no files/index; it seeds GENERAL_SYSTEM on this first turn.
                 self._append_system(
                     "No files loaded — general chat mode. Add files anytime for "
                     "grounded answers."
                 )
-                self._append_chat("You", user_text, "#3b82f6")
                 self._chat_worker = StreamingChatWorker(
                     [], model, user_text=user_text, embed_model=embed_model,
+                    initial_exchange=initial_exchange,
                 )
                 self._chat_files_loaded = True
                 busy_msg = "Thinking…"
-                # Fall through to the common dispatch tail below.
             else:
                 files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
                 if len(valid_paths) > CONTEXT_FILE_CAP:
@@ -1083,11 +1209,9 @@ class MainWindow(QMainWindow):
                         f"⚠  Only first {CONTEXT_FILE_CAP} of {len(valid_paths)} files loaded (token limit)."
                     )
                 self._append_system(f"Indexing {len(files)} file(s)…")
-                self._append_chat("You", user_text, "#3b82f6")
-
                 self._chat_worker = StreamingChatWorker(
                     [], model, files_to_load=files, user_text=user_text,
-                    embed_model=embed_model,
+                    embed_model=embed_model, initial_exchange=initial_exchange,
                 )
                 self._chat_worker.context_info.connect(self._on_context_info)
                 self._chat_worker.index_ready.connect(self._on_index_ready)
@@ -1096,13 +1220,8 @@ class MainWindow(QMainWindow):
                 )
                 busy_msg = "Indexing…"
         else:
-            self._chat_messages.append({"role": "user", "content": user_text})
-            self._append_chat("You", user_text, "#3b82f6")
             valid_paths = self._sidebar.get_valid_paths()
             if self._rag_index is None and valid_paths:
-                # Resumed session: the index wasn't rebuilt on load. Rebuild it on
-                # this turn while keeping the replayed history, so retrieval fires
-                # instead of sending a contextless RAG prompt.
                 files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
                 self._append_system(f"Re-indexing {len(files)} file(s)…")
                 self._chat_worker = StreamingChatWorker(
@@ -1151,6 +1270,7 @@ class MainWindow(QMainWindow):
         self._chat_messages = updated_messages
         self._append_system(f"⏱  {self._last_elapsed:.1f}s")
         self._set_chat_input_enabled(True)
+        self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
         self._chat_input.setFocus()
         self._auto_save()
 
@@ -1205,6 +1325,12 @@ class MainWindow(QMainWindow):
         self._chat_files_loaded = False
         self._chat_generation += 1
         self._summarize_results = {}
+        self._clarifying = False
+        self._clarify_round = 0
+        self._clarify_orig_user_text = ""
+        self._clarify_first_turn = False
+        self._clarify_exchange = []
+        self._chat_input.setPlaceholderText("Ask a question about the loaded files…")
         self._sidebar.clear_files()
         self._rebuild_summarize_strip()
         self._copy_all_btn.setEnabled(False)

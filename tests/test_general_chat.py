@@ -54,6 +54,13 @@ def test_run_chat_no_files_uses_general_prompt(monkeypatch):
     lfa.run_chat([], "mistral", embed_model="e", top_k=3, use_rag=True)
 
     assert captured, "the model was never called"
-    sent = captured[0]
+    # Clarification makes a probe call before the real answer; the actual answer
+    # call is the last one whose final message is the user's plain question.
+    answer_calls = [
+        msgs for msgs in captured
+        if not msgs[-1]["content"].startswith("[META-TASK")
+    ]
+    assert answer_calls, "the model was never called with a real question"
+    sent = answer_calls[0]
     assert sent[0] == {"role": "system", "content": lfa.GENERAL_SYSTEM}
     assert sent[-1] == {"role": "user", "content": "who are you?"}
