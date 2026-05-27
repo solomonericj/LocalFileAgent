@@ -2,12 +2,18 @@
 
 A command-line tool that scans local files and directories, then either summarises their contents or lets you chat with them interactively — all powered by a locally-running [Ollama](https://ollama.com) model. No data leaves your machine.
 
-Chat mode uses **RAG** (retrieval-augmented generation): your files are chunked and embedded once, and each question retrieves only the most relevant passages instead of stuffing every file into the prompt. The result is faster, more reliable answers — and it scales to far more content than a single context window. Pass `--no-rag` to fall back to full-context stuffing.
+Chat is a **general assistant**: it answers any question from the model's own knowledge and works with **zero files loaded**. Point it at files and they become extra context — the assistant draws on them and cites which file it used when relevant, but it won't refuse a question just because the answer isn't in your files.
+
+When files _are_ loaded, chat uses **RAG** (retrieval-augmented generation): your files are chunked and embedded once, and each question retrieves only the most relevant passages instead of stuffing every file into the prompt. The result is faster, more reliable answers — and it scales to far more content than a single context window. Pass `--no-rag` to fall back to full-context stuffing.
+
+Before answering each message, the assistant rates its own confidence in understanding the request; if it's unsure it asks a focused **clarifying question** first (up to three per turn) instead of guessing.
 
 ## Features
 
 ### GUI (PySide6)
 - **Unified workspace** — context sidebar, streaming chat, and on-demand summarization in one view
+- **General-assistant chat** — chat works with **no files loaded** (answers from the model's own knowledge); load files anytime to add grounded context
+- **Clarifying questions** — when the model is unsure what you mean, it asks a focused question inline before answering (up to three per turn)
 - **RAG-powered chat** — files are indexed once (with a pickable embedding model); each question retrieves the most relevant chunks
 - **Context sidebar** — always shows loaded files with status badges (✓ loaded / ⚠ skipped / deleted), per-file token estimates, a live token progress bar, and **model + embed-model pickers**
 - **Streaming responses** — model replies render token-by-token with a blinking cursor; UI stays responsive throughout
@@ -18,7 +24,8 @@ Chat mode uses **RAG** (retrieval-augmented generation): your files are chunked 
 
 ### CLI
 - **Summarise mode** — generates a concise 3-5 sentence summary for every matched file
-- **Chat mode** — RAG-based Q&A REPL: embeds your files once, then retrieves the top-k relevant chunks per question (`--no-rag` for full-context stuffing)
+- **Chat mode** — a general-assistant REPL that works with or without files. With no paths (`localfileagent --chat`) it's a plain Q&A assistant; with files it embeds them once and retrieves the top-k relevant chunks per question (`--no-rag` for full-context stuffing)
+- **Clarifying questions** — the assistant probes its own confidence before each answer and asks a focused question when it's unsure (up to three per turn)
 - Supports a wide range of **text formats**: `.py`, `.js`, `.ts`, `.md`, `.json`, `.yaml`, `.sql`, `.html`, `.csv`, and more
 - Supports **binary document formats**: `.pdf`, `.docx`, `.xlsx`, `.xls`, `.pptx`, `.ppt`
 - Optional **recursive** directory scanning
@@ -89,6 +96,9 @@ localfileagent /path/to/directory --output summaries.md
 # Only scan .py and .md files, recursively
 localfileagent /path/to/directory --ext .py .md --recursive
 
+# General-assistant chat — no files, answers from the model's own knowledge
+localfileagent --chat
+
 # Chat mode — RAG Q&A over the files interactively
 localfileagent /path/to/directory --chat
 
@@ -108,7 +118,7 @@ localfileagent /path/to/directory --chat --model gemma3
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `paths` | | One or more files or directories to scan (required unless `--gui`) |
+| `paths` | | One or more files or directories to scan (required for summarise; optional for `--chat` / `--gui`) |
 | `--gui` | | Launch the graphical interface instead of the CLI |
 | `--chat` | `-c` | Interactive Q&A mode instead of summarisation |
 | `--model` | `-m` | Ollama chat model to use (default: `mistral`) |
