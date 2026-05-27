@@ -28,13 +28,20 @@ def test_run_chat_rag_keeps_plain_history(monkeypatch):
 
     lfa.run_chat([Path("a.txt")], "mistral", embed_model="e", top_k=3, use_rag=True)
 
-    # Both outgoing requests carry the injected context in the latest turn.
-    assert "CTX" in captured[0][-1]["content"]
-    assert "CTX" in captured[1][-1]["content"]
+    # Clarification produces one probe call per turn; filter them out so we
+    # only check the real answer calls.
+    answer_calls = [
+        msgs for msgs in captured
+        if not msgs[-1]["content"].startswith("[META-TASK")
+    ]
+
+    # Both outgoing answer requests carry the injected context in the latest turn.
+    assert "CTX" in answer_calls[0][-1]["content"]
+    assert "CTX" in answer_calls[1][-1]["content"]
 
     # The second turn's history (everything before the latest turn) must hold
     # only plain text — no leaked "Context excerpts" from the first turn.
-    earlier = captured[1][:-1]
+    earlier = answer_calls[1][:-1]
     assert all("Context excerpts" not in m["content"] for m in earlier)
     user_contents = [m["content"] for m in earlier if m["role"] == "user"]
     assert "first question" in user_contents
