@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from LocalfileAgent import (
     SUPPORTED_EXTENSIONS, DEFAULT_MODEL, OLLAMA_TAGS,
     SUMMARISE_SYSTEM, CHAT_SYSTEM_TEMPLATE, CONTEXT_FILE_CAP,
-    RAG_SYSTEM, DEFAULT_EMBED_MODEL,
+    RAG_SYSTEM, GENERAL_SYSTEM, DEFAULT_EMBED_MODEL,
     read_file_safe, collect_files,
     query_ollama_generate, stream_ollama_chat,
 )
@@ -141,6 +141,13 @@ class StreamingChatWorker(QThread):
                         self._load_full_context()
                 else:
                     self._load_full_context()
+            elif not self.messages and self.user_text is not None:
+                # No files and no replayed history — a fresh general-chat turn.
+                # Seed the general-assistant system prompt so the model gets one.
+                self.messages = [
+                    {"role": "system", "content": GENERAL_SYSTEM},
+                    {"role": "user", "content": self.user_text},
+                ]
 
             api_messages = self._compose_api_messages()
 
@@ -1056,28 +1063,38 @@ class MainWindow(QMainWindow):
         if not self._chat_files_loaded:
             valid_paths = self._sidebar.get_valid_paths()
             if not valid_paths:
-                QMessageBox.warning(self, "No Files", "No accessible files. Check for deleted files in the sidebar.")
-                self._set_chat_input_enabled(True)
-                return
-
-            files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
-            if len(valid_paths) > CONTEXT_FILE_CAP:
+                # No files loaded — general-assistant chat. Dispatch a worker
+                # with no files/index; it seeds GENERAL_SYSTEM on this first turn.
                 self._append_system(
-                    f"⚠  Only first {CONTEXT_FILE_CAP} of {len(valid_paths)} files loaded (token limit)."
+                    "No files loaded — general chat mode. Add files anytime for "
+                    "grounded answers."
                 )
-            self._append_system(f"Indexing {len(files)} file(s)…")
-            self._append_chat("You", user_text, "#3b82f6")
+                self._append_chat("You", user_text, "#3b82f6")
+                self._chat_worker = StreamingChatWorker(
+                    [], model, user_text=user_text, embed_model=embed_model,
+                )
+                self._chat_files_loaded = True
+                busy_msg = "Thinking…"
+                # Fall through to the common dispatch tail below.
+            else:
+                files = [Path(p) for p in valid_paths[:CONTEXT_FILE_CAP]]
+                if len(valid_paths) > CONTEXT_FILE_CAP:
+                    self._append_system(
+                        f"⚠  Only first {CONTEXT_FILE_CAP} of {len(valid_paths)} files loaded (token limit)."
+                    )
+                self._append_system(f"Indexing {len(files)} file(s)…")
+                self._append_chat("You", user_text, "#3b82f6")
 
-            self._chat_worker = StreamingChatWorker(
-                [], model, files_to_load=files, user_text=user_text,
-                embed_model=embed_model,
-            )
-            self._chat_worker.context_info.connect(self._on_context_info)
-            self._chat_worker.index_ready.connect(self._on_index_ready)
-            self._chat_worker.file_status.connect(
-                lambda p, s, t: self._sidebar.set_file_status(p, s, t)
-            )
-            busy_msg = "Indexing…"
+                self._chat_worker = StreamingChatWorker(
+                    [], model, files_to_load=files, user_text=user_text,
+                    embed_model=embed_model,
+                )
+                self._chat_worker.context_info.connect(self._on_context_info)
+                self._chat_worker.index_ready.connect(self._on_index_ready)
+                self._chat_worker.file_status.connect(
+                    lambda p, s, t: self._sidebar.set_file_status(p, s, t)
+                )
+                busy_msg = "Indexing…"
         else:
             self._chat_messages.append({"role": "user", "content": user_text})
             self._append_chat("You", user_text, "#3b82f6")

@@ -148,6 +148,33 @@ def test_preserve_history_rebuilds_index_keeping_history(qtbot, monkeypatch, tmp
     assert msgs[-1] == {"role": "assistant", "content": "ok"}
 
 
+def test_no_files_first_turn_seeds_general_system(qtbot, monkeypatch):
+    """A first turn with no files and no index must seed GENERAL_SYSTEM so the
+    model gets a system prompt (empty history would otherwise send none)."""
+    import gui
+
+    captured = {}
+
+    def fake_stream(messages, model):
+        captured["messages"] = messages
+        yield "ok"
+
+    monkeypatch.setattr(gui, "stream_ollama_chat", fake_stream)
+
+    worker = gui.StreamingChatWorker([], "mistral", user_text="who are you?")
+    finished = []
+    worker.finished.connect(finished.append)
+    with qtbot.waitSignal(worker.finished, timeout=5000):
+        worker.start()
+
+    sent = captured["messages"]
+    assert sent[0] == {"role": "system", "content": gui.GENERAL_SYSTEM}
+    assert sent[-1] == {"role": "user", "content": "who are you?"}
+    # Persisted history mirrors the seeded conversation + the reply.
+    assert finished[0][0]["content"] == gui.GENERAL_SYSTEM
+    assert finished[0][-1] == {"role": "assistant", "content": "ok"}
+
+
 def test_rag_turn_injects_context_but_keeps_plain_history(qtbot, monkeypatch):
     import gui
     from rag import Chunk

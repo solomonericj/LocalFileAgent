@@ -185,4 +185,7 @@ def build_rag_prompt(chunks: list[Chunk], user_text: str) -> str:
     if not chunks:
         return user_text
     ctx = "\n\n".join(f"[{c.source}]\n{c.text}" for c in chunks)
-    return f"Context excerpts:\n{ctx}\n\nQuestion: {user_text}"
+    return (
+        f"Context excerpts from my files that may be relevant:\n{ctx}\n\n"
+        f"Question: {user_text}"
+    )
