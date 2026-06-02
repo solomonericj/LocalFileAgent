@@ -20,8 +20,10 @@ docx    = ["python-docx"]
 xlsx    = ["openpyxl"]
 xls     = ["xlrd"]
 pptx    = ["python-pptx"]
+odf     = ["odfpy"]                                                          # .odt/.ods/.odp
+7z      = ["py7zr"]                                                          # .7z archives
 legacy  = ["pywin32; sys_platform == 'win32'"]                              # .doc/.ppt via Office COM
-parsers = ["pypdf", "python-docx", "openpyxl", "xlrd", "python-pptx"]       # all cross-platform binary parsers
+parsers = ["pypdf", "python-docx", "openpyxl", "xlrd", "python-pptx", "odfpy", "py7zr"]  # all cross-platform binary parsers
 dev     = ["pytest>=8.0", "pytest-qt>=4.4"]
 
 [project.scripts]

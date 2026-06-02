@@ -53,10 +53,27 @@ TEXT_EXTENSIONS = {
     ".rb", ".php", ".swift", ".kt", ".sh", ".bash",
     ".html", ".css", ".json", ".yaml", ".yml", ".toml",
     ".xml", ".csv", ".rst", ".sql",
+    # Config / environment
+    ".ini", ".cfg", ".conf", ".env",
+    # IaC / DevOps
+    ".tf", ".tfvars", ".hcl", ".ps1", ".bat", ".cmd",
+    # Additional languages
+    ".dart", ".scala", ".lua", ".ex", ".exs",
+    ".r", ".zig",
+    # Web frameworks
+    ".vue", ".svelte",
+    # Schema / IDL
+    ".graphql", ".gql", ".proto",
 }
 
 BINARY_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+    # Notebooks / email
+    ".ipynb", ".eml",
+    # OpenDocument
+    ".odt", ".ods", ".odp",
+    # Archives
+    ".zip", ".7z", ".tar", ".tgz",
 }
 
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | BINARY_EXTENSIONS
@@ -359,6 +376,14 @@ def _extract_binary(path: Path, ext: str) -> str | None:
             return _extract_xls(path)
         if ext in (".doc", ".ppt"):
             return _extract_via_word_powerpoint(path, ext)
+        if ext == ".ipynb":
+            return _extract_ipynb(path)
+        if ext == ".eml":
+            return _extract_eml(path)
+        if ext in (".odt", ".ods", ".odp"):
+            return _extract_odf(path, ext)
+        if ext in (".zip", ".7z", ".tar", ".tgz"):
+            return _extract_archive(path, ext)
     except Exception as exc:
         print(f"\n⚠  Failed to extract {path.name}: {exc}", file=sys.stderr)
         return None
@@ -481,6 +506,123 @@ def _extract_via_word_powerpoint(path: Path, ext: str) -> str | None:
                 app.Quit()
     finally:
         pythoncom.CoUninitialize()
+
+
+def _extract_ipynb(path: Path) -> str | None:
+    try:
+        nb = json.loads(path.read_bytes())
+    except Exception:
+        return None
+    parts: list[str] = []
+    for cell in nb.get("cells", []):
+        cell_type = cell.get("cell_type", "")
+        source = "".join(cell.get("source", []))
+        if not source.strip():
+            continue
+        if cell_type == "code":
+            parts.append(f"```python\n{source}\n```")
+        else:
+            parts.append(source)
+        for output in cell.get("outputs", []):
+            text = output.get("text") or output.get("data", {}).get("text/plain")
+            if isinstance(text, list):
+                text = "".join(text)
+            if text and text.strip():
+                parts.append(f"[Output]\n{text}")
+    return "\n\n".join(parts) or None
+
+
+def _extract_eml(path: Path) -> str | None:
+    import email as _email
+    import email.policy
+    msg = _email.message_from_bytes(path.read_bytes(), policy=_email.policy.compat32)
+    parts: list[str] = []
+    for header in ("Subject", "From", "To", "Date"):
+        val = msg.get(header)
+        if val:
+            parts.append(f"{header}: {val}")
+    parts.append("")
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain":
+            payload = part.get_payload(decode=True)
+            if payload:
+                parts.append(payload.decode("utf-8", errors="replace"))
+    return "\n".join(parts) or None
+
+
+def _extract_odf(path: Path, ext: str) -> str | None:
+    try:
+        from odf.opendocument import load as odf_load
+        from odf import text as odf_text
+        from odf import teletype
+    except ImportError:
+        _missing("odfpy", ext)
+        return None
+    doc = odf_load(str(path))
+    paragraphs = doc.getElementsByType(odf_text.P)
+    return "\n".join(teletype.extractText(p) for p in paragraphs) or None
+
+
+def _extract_archive(path: Path, ext: str) -> str | None:
+    parts: list[str] = []
+    total = 0
+
+    def _fits(name: str) -> bool:
+        return Path(name).suffix.lower() in TEXT_EXTENSIONS
+
+    def _add(name: str, content: str) -> bool:
+        nonlocal total
+        parts.append(f"[{name}]\n{content}")
+        total += len(content)
+        return total >= MAX_EXTRACT_CHARS
+
+    if ext == ".zip":
+        import zipfile
+        if not zipfile.is_zipfile(path):
+            return None
+        with zipfile.ZipFile(path) as zf:
+            for info in zf.infolist():
+                if info.is_dir() or not _fits(info.filename):
+                    continue
+                try:
+                    with zf.open(info) as f:
+                        if _add(info.filename, f.read().decode("utf-8", errors="replace")):
+                            break
+                except Exception:
+                    continue
+
+    elif ext == ".7z":
+        try:
+            import py7zr
+        except ImportError:
+            _missing("py7zr", ".7z")
+            return None
+        with py7zr.SevenZipFile(path, mode="r") as z:
+            names = [n for n in z.getnames() if _fits(n)]
+            if names:
+                for name, bio in z.read(names).items():
+                    if _add(name, bio.read().decode("utf-8", errors="replace")):
+                        break
+
+    elif ext in (".tar", ".tgz"):
+        import tarfile
+        try:
+            with tarfile.open(path, "r:*") as tf:
+                for member in tf.getmembers():
+                    if not member.isfile() or not _fits(member.name):
+                        continue
+                    try:
+                        f = tf.extractfile(member)
+                        if f is None:
+                            continue
+                        if _add(member.name, f.read().decode("utf-8", errors="replace")):
+                            break
+                    except Exception:
+                        continue
+        except tarfile.TarError:
+            return None
+
+    return "\n\n".join(parts) or None
 
 
 # ── Summarise mode ────────────────────────────────────────────────────────────
